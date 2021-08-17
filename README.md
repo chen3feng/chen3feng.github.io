@@ -1,4 +1,3 @@
-chen3feng.github.io
-====================
+# Chen3feng's Homepage
 
-My Homepage
+Welcome to my homepage.
