@@ -1,0 +1,8 @@
+title: chen3feng.github.com
+description: My Homepage
+google_analytics: 
+show_downloads: true
+theme: jekyll-theme-hacker
+
+gems:
+  - jekyll-mentions
