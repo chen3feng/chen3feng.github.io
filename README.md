@@ -1,3 +1,3 @@
-# Chen3feng's Homepage
+# Chen3feng 的 blog
 
-Welcome to my homepage.
+一些关于软件开发、英语学习、学习方法的随笔，以及一些胡言乱语。
