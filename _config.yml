@@ -16,7 +16,7 @@ timezone: Asia/Shanghai
 
 title: Chen3feng Blog # the main title
 
-tagline: 
+tagline:
   Hi, this is chen3feng. I am documenting my learning notes in this blog. # it will display as the sub-title
 
 description: >- # used by seo meta and the atom feed
