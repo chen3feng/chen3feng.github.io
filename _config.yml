@@ -14,7 +14,7 @@ timezone: Asia/Shanghai
 # jekyll-seo-tag settings › https://github.com/jekyll/jekyll-seo-tag/blob/master/docs/usage.md
 # ↓ --------------------------
 
-title: Chen3feng Blog # the main title
+title: Chen3feng's Blog # the main title
 
 tagline:
   Hi, this is chen3feng. I am documenting my learning notes in this blog. # it will display as the sub-title
