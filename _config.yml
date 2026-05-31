@@ -56,6 +56,17 @@ google_site_verification: # fill in to your verification string
 google_analytics:
   id: # fill in your Google Analytics ID
 
+# 不蒜子 pageview counter — site-wide + per-post display.
+# No backend setup needed; toggle off here to disable everywhere.
+busuanzi:
+  enabled: true
+
+# GoatCounter privacy-friendly analytics (https://www.goatcounter.com).
+# Sign up, then fill `code` with the subdomain you chose (e.g. "chen3feng"
+# for chen3feng.goatcounter.com). Empty = disabled, no script emitted.
+goatcounter:
+  code:
+
 # Prefer color scheme setting.
 #
 # Note: Keep empty will follow the system prefer color by default,
