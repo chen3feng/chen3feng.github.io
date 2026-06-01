@@ -32,13 +32,15 @@ published: true
 这篇笔记把这套机制从头到尾拆一遍。所有可运行代码用 Python，因为 ANSI 转义和具体语言
 无关，读着也不累。
 
-主要阅读了 [tqqm](https://github.com/tqdm/tqdm) 的源代码，这是是一个功能强大的
+主要阅读了 [tqdm](https://github.com/tqdm/tqdm) 的源代码，这是是一个功能强大的
 Python 进度条库，常用于循环操作、文件处理、网络爬虫或机器学习模型训练中。它能在终端或
 命令行中实时显示进度百分比、已处理数量、预估剩余时间及处理速度。
 
 顺便说一下 tqdm 这个拗口又难记的名字。源自阿拉伯语字根 “taqaddum” (تقدّم)，意思是 
 “进展”或“进步”（progress）。同时，它也是西班牙语 “Te quiero demasiado” 的首字母缩写，
 意思是 “我太爱你（们）了”，这代表了作者对开源社区的喜爱。（是不是还是记不住，我也是😂）
+
+另外也去看了 Bazel 的实现。
 
 ---
 
@@ -171,7 +173,7 @@ def _compute_progress_bar_width(total):
 ```
 
 CodeQL 没抓住这个 off-by-one，**UT 抓住了**——我专门写了一条"整行长度严格小于终
-端宽度"的不变式测试，跑出来在 `cols=60` 这一档恰好踩中。Bazel 用的是同一招（套
+端宽度"的不变式测试，跑出来在 `cols=60` 这一档恰好踩中。我还看了 Bazel 也用的是同一招（套
 `LineWrappingAnsiTerminalWriter` 按 `terminalWidth - 1` 强制换行），思路完全一致：
 **不让终端替你做这件事**。
 
@@ -314,7 +316,7 @@ tqdm 假设你在主循环里**不断调用 `update()`**——每次迭代驱动
 （最小 200ms）醒一次：
 
 ```python
-# 思路示意（Python 版）
+# 思路示意（Python 版改写）
 def ticker():
     while not shutdown:
         time.sleep(0.2)
@@ -330,7 +332,7 @@ threading.Thread(target=ticker, daemon=True).start()
 
 ## 五、动手写一个：50 行 Python 最小可用版
 
-光看 Bazel 容易"觉得自己懂了"，自己写一遍才是真懂。下面这段代码把前面所有要点都体
+光看 tqdm 和 Bazel 容易"觉得自己懂了"，自己写一遍才是真懂。下面这段代码把前面所有要点都体
 现了——锁、行数簿记、隐藏 cursor、消息往上滚、ticker 自动跳秒数——可以直接拷出去
 跑（不要在 IDE 输出窗口跑，会失真，必须在真终端）：
 
@@ -714,7 +716,7 @@ UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI �
 
 ## 十、各语言常用库
 
-如果不想自己写，下面这些库已经把所有细节做对了：
+如果不想自己写，就去用下面这些库，它们把所有累活全给你做了：
 
 - **Python**
   - [`tqdm`](https://github.com/tqdm/tqdm)：最流行的单行进度库，多线程也撑得起。
