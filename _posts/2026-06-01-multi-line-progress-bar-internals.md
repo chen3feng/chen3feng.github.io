@@ -699,11 +699,9 @@ atexit），用 `# lgtm[py/file-not-closed]` 抑制即可。
 | 多行底部进度 + 错误向上滚 | 多个工具共同贡献：`apt`、`dpkg`、`pacman`、`docker pull`（2013 把它推向主流）、`cargo`、`bazel` |
 | Bazel 里这套代码 | Ulf Adams 2016-02 起头（commit [`d6347a971e7`][bazel-init]），Klaus Aehlig 长期维护 |
 
-[bazel-init]: https://github.com/bazelbuild/bazel/commit/d6347a971e7
+tqdm 最早的历史是 2013 年。
 
-Bazel 最早的类名叫 `ExperimentalEventHandler`（"实验性的 UI"），2019 年 Ulf Adams
-自己把它改名成现在的 `UiEventHandler`。当年的 PR 描述里很谦虚地说"加了一个实验性
-UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI 默认实现。
+[tqdm-2013](https://github.com/tqdm/tqdm/commit/fbe7952cce11e8073378b063bdae7ab277a96eb8)
 
 [**Docker pull 2013 年发布**][docker-2013]时的多层并行下载进度，是这套套路真正走向
 "日常可见"的转折点——它让大家发现"多个 task、每行一个进度、底部固定"不只是
@@ -711,6 +709,12 @@ UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI �
 进，多行进度条成了"现代 CLI 工具"的视觉标志。
 
 [docker-2013]: https://docs.docker.com/engine/release-notes/
+
+Bazel 最早的类名叫 `ExperimentalEventHandler`（"实验性的 UI"），2019 年 Ulf Adams
+自己把它改名成现在的 `UiEventHandler`。当年的 PR 描述里很谦虚地说"加了一个实验性
+UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI 默认实现。
+
+[bazel-init]: https://github.com/bazelbuild/bazel/commit/d6347a971e7
 
 ---
 
