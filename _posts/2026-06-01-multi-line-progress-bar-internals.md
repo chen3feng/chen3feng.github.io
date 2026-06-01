@@ -1,5 +1,5 @@
 ---
-title: "终端多行进度条是怎么实现的：从 `\\r` 到 Bazel 的 UI 状态栈"
+title: "终端多行进度条是怎么实现的"
 date: "2026-06-01 20:00:00 +0800"
 categories: [System, CLI]
 tags: [Terminal, ANSI, Progress Bar, Bazel, Python, Curses]
