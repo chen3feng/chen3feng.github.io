@@ -1,6 +1,6 @@
 ---
 icon: fas fa-magnifying-glass
-order: 5
+order: 4
 title: Code Analysis
 ---
 
