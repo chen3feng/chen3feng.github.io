@@ -1,6 +1,6 @@
 ---
 title: "终端多行进度条是怎么实现的"
-date: "2026-06-01 20:00:00 +0800"
+date: "2026-06-01 09:00:00 +0800"
 categories: [System, CLI]
 tags: [Terminal, ANSI, Progress Bar, Bazel, Python, Curses]
 layout: post
