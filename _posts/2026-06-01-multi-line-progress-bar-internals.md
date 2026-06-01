@@ -10,7 +10,8 @@ published: true
 > 错误信息往上滚、多行进度条永远停在最后、还一秒一跳——还不会被错误信息撞乱。
 > 这件事在 Bazel、Docker、Cargo 里见过无数次，单行 `\r` 的小把戏明显不够用。中文社
 > 区几乎没人讲透，我顺手研究了一下，把"擦帧—写消息—重画"这一套从 VT100 起源讲到
-> Bazel 源码，最后给一个 50 行的 Python 最小可用版。
+> tqdm 与 Blade 的实际代码（包括 Windows 上必须自己开启 VTP 这件事），最后给一个
+> 50 行的 Python 最小可用版。
 
 我这个年代的人，接触计算机时都是从那个黑乎乎的 DOS 字符界面开始的。最近几十年来字符界面
 的程序也越来越漂亮了，比如 conda 和 docker 之类的都有多行进度条。
@@ -29,8 +30,6 @@ published: true
 
 这篇笔记把这套机制从头到尾拆一遍。所有可运行代码用 Python，因为 ANSI 转义和具体语言
 无关，读着也不累。
-
-[blade]: https://github.com/blade-build/blade-build
 
 ---
 
@@ -120,18 +119,25 @@ def clear_block(n_lines):
 你下一次擦的行数 = 上一次写的行数。写少了，旧帧的下半部会留在屏幕上变成"幽灵进度条"；
 写多了，会把上面正常滚屏出去的内容（前面的日志、错误）也擦掉。
 
-Bazel 的做法：用一个 `LineCountingAnsiTerminalWriter` 在画的时候**顺手数行数**，
-存到一个全局变量 `numLinesProgressBar` 里——擦的时候按这个数擦。
+[tqdm][tqdm] 在 [`tqdm/std.py#L1441-L1444`][tqdm-moveto] 把这件事抽象成一个
+`moveto(n)`：
 
-```java
-// bazel/.../UiEventHandler.java（节选并简化）
-LineCountingAnsiTerminalWriter countingTerminalWriter =
-    new LineCountingAnsiTerminalWriter(terminal);
-stateTracker.writeProgressBar(countingTerminalWriter, ...);
-numLinesProgressBar = countingTerminalWriter.getWrittenLines();
+```python
+# tqdm v4.67.3, tqdm/std.py:1441
+def moveto(self, n):
+    self.fp.write('\n' * n + _term_move_up() * -n)
+    getattr(self.fp, 'flush', lambda: None)()
 ```
 
-简单粗暴，但是这个簿记**必须严格正确**，差一行整个画面都会崩。
+- `n` 为正：写 n 个 `\n`，光标往下移 n 行（同时滚屏）；
+- `n` 为负：写 `-n` 个 `\x1b[A`（[`_term_move_up()`][tqdm-tmu]），光标上移不滚屏。
+
+每一条 bar 记自己的 `pos`（位置），擦自己之前先 `moveto(pos)` 上去、写完再
+`moveto(-pos)` 回来。同样，**`pos` 必须严格正确**，差一行整个画面都会崩。
+
+[tqdm]: https://github.com/tqdm/tqdm
+[tqdm-moveto]: https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/std.py#L1441-L1444
+[tqdm-tmu]: https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/utils.py#L370-L371
 
 ### 3.2 不能信终端的自动折行
 
@@ -140,19 +146,27 @@ numLinesProgressBar = countingTerminalWriter.getWrittenLines();
 才换）。你以为画了 3 行，实际上其中一行被折成了 2 行——擦的时候按 3 行擦，留下一
 行。屏幕花掉。
 
-正解：**主动控制换行**，永远不让任何一行接近终端宽度。Bazel 套了一层
-`LineWrappingAnsiTerminalWriter`，按 `terminalWidth - 1` 强制换行，**不让终端帮我
-干这件事**。
-
-我在 Blade 这次重构里也踩到了一模一样的坑：
+正解：**主动控制换行**，永远不让任何一行接近终端宽度。Blade 这次重构里我新加的
+[`_compute_progress_bar_width`][blade-width] 就是干这件事的：
 
 ```python
-# 错的：bar_width = cols - overhead   ← 整行长度恰好 == cols，某些终端会折
-# 对的：bar_width = cols - overhead - 1
+# blade/src/blade/console.py:232
+def _compute_progress_bar_width(total):
+    """Pick a bar width that fits the current terminal, bounded by [MIN, MAX]."""
+    cols = shutil.get_terminal_size((80, 24)).columns
+    overhead = 9 + 2 * len(str(total))
+    return max(_MIN_PROGRESS_BAR_WIDTH,
+               min(_MAX_PROGRESS_BAR_WIDTH, cols - overhead - 1))
+                                         #  ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+                                         #  关键就这个 -1 留 1 列 margin
 ```
 
-CodeQL 没抓住，UT 抓住了——我专门写了一条"整行长度严格小于终端宽度"的不变式测试，
-跑出来在 `cols=60` 这一档恰好踩中。
+CodeQL 没抓住这个 off-by-one，**UT 抓住了**——我专门写了一条"整行长度严格小于终
+端宽度"的不变式测试，跑出来在 `cols=60` 这一档恰好踩中。Bazel 用的是同一招（套
+`LineWrappingAnsiTerminalWriter` 按 `terminalWidth - 1` 强制换行），思路完全一致：
+**不让终端替你做这件事**。
+
+[blade-width]: https://github.com/blade-build/blade-build/blob/295a44d/src/blade/console.py#L232-L240
 
 ### 3.3 `\033[K` 还是 `\033[2K`？
 
@@ -165,6 +179,23 @@ ESC [ 2 K              # 清整行（不影响光标）
 很多博客抄来抄去都用 `\033[2K`，但配合 `\r`（光标到列 0）用的话，`\033[0K` 和
 `\033[2K` 视觉效果一致——而 `\033[0K` 更精确："只清光标后面的内容"。Bazel 用 `K`，
 Blade 改完也是 `K`，我也推荐这个。
+
+还有一种不用转义码的做法：**末尾填够空格**。tqdm 的 [`status_printer`][tqdm-sp]
+就这么干：
+
+```python
+# tqdm v4.67.3, tqdm/std.py:451
+def print_status(s):
+    len_s = disp_len(s)
+    fp_write('\r' + s + (' ' * max(last_len[0] - len_s, 0)))
+    last_len[0] = len_s
+```
+
+记住"上次写了几个字符"，这次写完后补够空格盖住末尾——和 `\033[K` 殊途同归。优点
+是连转义码都不依赖（理论上连最古老的纯 ASCII 终端都能跑）；缺点是要多记一个状态、
+要算字符显示宽度（`disp_len`，CJK 全角字符算 2 列）。
+
+[tqdm-sp]: https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/std.py#L437-L462
 
 ---
 
@@ -187,56 +218,104 @@ on_progress_tick():
     2. draw_progress_bar()     # 同样的逻辑，只是没消息要写
 ```
 
-Bazel 的 [UiEventHandler.handleLocked][handle-locked] 里清清楚楚就是这个模式，
-`synchronized (this)` 把"擦—写—重画"三步包成原子操作：
+tqdm 把这个模式封成了一个上下文管理器，看下面这段代码会一眼明白
+（[`tqdm/std.py#L725-L753`][tqdm-ewm]）：
 
-```java
-// 简化版
-case ERROR: case WARNING: case INFO: ...
-    clearProgressBar();           // ① 擦
-    terminal.writeString(...);    // ② 写错误信息 + \n
-    if (showProgress && cursorControl) {
-        addProgressBar();         // ③ 重画进度条
-    }
-    terminal.flush();
+```python
+# tqdm v4.67.3, tqdm/std.py:725
+@classmethod
+@contextmanager
+def external_write_mode(cls, file=None, nolock=False):
+    """Disable tqdm within context and refresh tqdm when exits."""
+    fp = file if file is not None else sys.stdout
+    try:
+        if not nolock:
+            cls.get_lock().acquire()
+        inst_cleared = []
+        for inst in getattr(cls, '_instances', []):
+            if hasattr(inst, "start_t") and (inst.fp == fp or all(
+                    f in (sys.stdout, sys.stderr) for f in (fp, inst.fp))):
+                inst.clear(nolock=True)        # ① 擦掉所有进度条
+                inst_cleared.append(inst)
+        yield                                   # ② 用户在这里写消息
+        for inst in inst_cleared:
+            inst.refresh(nolock=True)          # ③ 把擦掉的进度条重画回来
+    finally:
+        if not nolock:
+            cls._lock.release()
 ```
 
-[handle-locked]: https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/runtime/UiEventHandler.java
+这就是"擦—写—重画"三步原子化的最简形态。所有 bar 在 yield 之前被清空，业务代码
+在 yield 内写出去的内容直接落到原来进度条的位置，yield 退出后所有 bar 一次重画回
+来。"清+写+重画"被一把**类级锁** `cls._lock` 包成原子。
 
-错误信息留在了原来进度条的位置，紧接着 `\n` 把光标推到下一行，进度条画在那一行——
-**视觉上就是消息往上滚、进度条留在最后**。
+[tqdm-ewm]: https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/std.py#L725-L753
 
-子进程的 `stdout` / `stderr` 路径有个额外细节：进程输出可能一个字节一个字节来，每
-来一次就触发"擦—写—重画"会疯狂闪烁。Bazel 的做法是**行缓冲**——没看到 `\n` 就只
-塞进 buffer，看到 `\n` 才整行一次性吐出去。这样进度条只在"完整一行"边界被打扰，视
-觉非常稳。
+`tqdm.write()` 就是这个上下文管理器最薄的一层封装（[`tqdm/std.py#L716-L723`][tqdm-write]）：
 
-### 后台刷新线程
-
-如果只在"有事件发生时"才刷新，进度条上那个秒数计数器就不会跳。Bazel 起了一个专门
-的线程 `cli-update-thread`，每 `minimalUpdateInterval` 毫秒（最小 200ms）醒一次，
-触发一次重绘：
-
-```java
-new Thread(() -> {
-    while (!shutdown) {
-        Thread.sleep(minimalUpdateInterval);
-        doRefresh(/* fromUpdateThread= */ true);
-    }
-}, "cli-update-thread").start();
+```python
+# tqdm v4.67.3, tqdm/std.py:716
+@classmethod
+def write(cls, s, file=None, end="\n", nolock=False):
+    """Print a message via tqdm (without overlap with bars)."""
+    fp = file if file is not None else sys.stdout
+    with cls.external_write_mode(file=file, nolock=nolock):
+        fp.write(s)
+        fp.write(end)
 ```
 
-这个 200ms 是个经验值：肉眼觉得"活着"，又不会刷屏太频繁；`ninja`、`cargo`、`pip`
-基本都在 100~300ms 这个量级。
+用户写 `tqdm.write("Some message")`，库内部把它翻译成"清→写→重画"。**这就是 tqdm
+"打印消息但不破坏进度条"的全部秘密**——你看着觉得多魔法，看完源码发现就是十几行
+代码。
 
-### 并发的两层防护
+Blade 走的是同一条路。[`blade/src/blade/console.py#L331-L336`][blade-doprint] 的
+`_do_print` 跟上面那个 yield 块的语义一模一样，只是直接写出来没用 `contextmanager`：
 
-后台刷新线程和业务线程会撞。Bazel 用两层防护：
+```python
+# blade/src/blade/console.py:331
+def _do_print(msg, file=sys.stdout):
+    with _print_lock:                       # 同一把锁
+        _clear_progress_bar_locked()        # ① 擦
+        print(msg, file=file)               # ② 写消息（自带 \n）
+                                            # ③ 重画由下一次 show_progress_bar 完成
+```
 
-1. `handleLocked()` 整个用 `synchronized(this)` 包住——"擦—写—重画"三步对外原子。
-2. 后台 `doRefresh()` 用 `updateLock.tryLock()`，**拿不到锁就直接放弃这次刷新**——
-   因为反正马上有下一次，丢一帧无所谓。这样业务线程永远不会被刷新阻塞，刷新也不会
-   插进业务线程的写序列中间。
+注意 Blade 比 tqdm 简单一点：它只有一条 bar，不像 tqdm 要遍历 `cls._instances` 处理
+多个。这是单 bar 场景下能走的捷径——但**锁 + 三步擦写画**的骨架是同一个。
+
+[tqdm-write]: https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/std.py#L716-L723
+[blade-doprint]: https://github.com/blade-build/blade-build/blob/295a44d/src/blade/console.py#L331-L336
+
+### 行缓冲：避免逐字节刷屏
+
+子进程的 `stdout` / `stderr` 输出可能一个字节一个字节来，每来一次就触发"擦—写—
+重画"会疯狂闪烁。常见做法是**行缓冲**——没看到 `\n` 就只塞进 buffer，看到 `\n` 才
+整行一次性吐出去。这样进度条只在"完整一行"边界被打扰，视觉非常稳。Bazel 做了这件
+事，tqdm 因为是 Python 库（接收的就是 Python 字符串），调用方天然按行写，所以不
+需要库自己缓冲。
+
+### 不是迭代驱动？得加个后台线程
+
+tqdm 假设你在主循环里**不断调用 `update()`**——每次迭代驱动一次重绘。这对"我在跑
+1 万次循环"这种场景很自然。
+
+但 Bazel/Blade 这种构建工具的进度更新**不是迭代驱动**的：一个 action 可能跑几十秒，
+中间没有任何"tick"事件，你又想让"已用时间"那个数字一秒一跳。这就需要一个独立的后
+台线程定期触发重绘。Bazel 的 `cli-update-thread` 每 `minimalUpdateInterval` 毫秒
+（最小 200ms）醒一次：
+
+```python
+# 思路示意（Python 版）
+def ticker():
+    while not shutdown:
+        time.sleep(0.2)
+        with lock:
+            clear_block(); draw_block()
+threading.Thread(target=ticker, daemon=True).start()
+```
+
+200ms 是个经验值——肉眼觉得"活着"，又不会刷屏太频繁；`ninja`、`cargo` 基本都在
+100~300ms 这个量级。第五节那个最小可用版我也用了 200ms。
 
 ---
 
@@ -325,13 +404,146 @@ for i in range(20):
 - 把 `atexit.register(_show)` 注掉、Ctrl+C 退出 → 终端 cursor 永久消失，要敲
   `reset` 才回来。
 
-这三个反例分别对应 Bazel `UiEventHandler` 里**最关键的三块代码**：清屏 dance、
-`synchronized` 互斥、`numLinesProgressBar` 行数簿记。再加一个 cursor 的 atexit
-钩子，构成了我在 Blade 里给 `console.py` 补的所有内容。
+这三个反例分别对应 tqdm 里**最关键的三块代码**：`clear` / `external_write_mode` 的
+擦写 dance、类级 `cls._lock` 互斥、每条 bar 的 `pos` + `moveto(pos)` 行数簿记。再
+加一个 cursor 的 atexit 钩子，构成了我在 Blade 里给 `console.py` 补的所有内容。
 
 ---
 
-## 六、用 curses 行不行？
+## 六、Windows 的特殊情况：先开 VTP
+
+第五节那个最小可用版我特别注明了"在真终端跑"。Linux / macOS 上这句话默认成立。
+**Windows 上不一定**——这是一个独立的、值得拆开讲的话题。
+
+ANSI 转义码在 Windows 上历史上**不被原生支持**——`cmd.exe` 直到 Windows 10 build
+16257（2016 年的 Anniversary Update）才引入"Console Virtual Terminal Sequences"
+特性，**而且默认是关的**，必须程序自己显式开启。
+
+### 6.1 检测 + 开启：`GetConsoleMode` / `SetConsoleMode`
+
+Win32 提供 `GetConsoleMode(handle, &mode)` 读当前模式 flag bitmap，关键位是
+`ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004`。Blade 的
+[`_windows_console_support_ansi_color`][blade-vtp]
+用 `ctypes` 直接调原生 API，**检测和开启一气呵成**：
+
+```python
+# blade/src/blade/console.py:33
+def _windows_console_support_ansi_color():
+    from ctypes import byref, windll, wintypes
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+    INVALID_HANDLE_VALUE = -1
+    STD_OUTPUT_HANDLE = -11
+
+    handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+    if handle == INVALID_HANDLE_VALUE:
+        return False                          # ← 不是真 console（被 IDE 启动等）
+
+    mode = wintypes.DWORD()
+    if not windll.kernel32.GetConsoleMode(handle, byref(mode)):
+        return False                          # ← 查不到模式，多半也不是 console
+
+    if not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+        if windll.kernel32.SetConsoleMode(
+            handle,
+            mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING) == 0:
+            print('kernel32.SetConsoleMode to enable ANSI sequences failed',
+                file=sys.stderr)              # ← 老 Windows 没这位，set 失败
+    return True
+```
+
+注意几个细节：
+
+- **`STD_OUTPUT_HANDLE = -11`** 是 Win32 常量；Python 3 的 `subprocess` 模块上也有
+  这个名字，但只在 Windows 上可用——直接写 `-11` 加注释，省一道平台分支。
+- **handle == `INVALID_HANDLE_VALUE` (-1)** 表示拿不到 console handle，多半是 stdout
+  被重定向到管道/文件，这时根本不该启用任何转义。
+- **`SetConsoleMode` 返回 0** 是失败：老 Windows（7/8/8.1）没有 VTP 这一位，设不上。
+  失败时函数仍然返回 `True` 但写了一条警告——意思是"已经试过了，不行就让转义码
+  按原样落到 stdout 上吧"。
+- 调用 `SetConsoleMode` 时**必须保留原 mode 的其他位**（`mode.value | VTP`），不能
+  直接 `mode = VTP`——会清掉 `ENABLE_PROCESSED_OUTPUT` 之类的位，控制台反应会很奇怪。
+
+[blade-vtp]: https://github.com/blade-build/blade-build/blob/295a44d/src/blade/console.py#L33-L53
+
+### 6.2 另一条路：colorama（tqdm 的选择）
+
+`tqdm` 不直接调 Win32 API，它把脏活外包给 [`colorama`][colorama]——一个 pure-Python
+包，**通过劫持 `sys.stdout` / `sys.stderr` 把流过的 ANSI 序列翻译成 Win32 console
+API 调用**。导入时机就在 [`tqdm/utils.py#L14-L31`][tqdm-utils]：
+
+```python
+# tqdm v4.67.3, tqdm/utils.py:14
+CUR_OS = sys.platform
+IS_WIN = any(CUR_OS.startswith(i) for i in ['win32', 'cygwin'])
+...
+try:
+    if IS_WIN:
+        import colorama
+    else:
+        raise ImportError
+except ImportError:
+    colorama = None
+else:
+    try:
+        colorama.init(strip=False)
+    except TypeError:
+        colorama.init()
+```
+
+没装 colorama 怎么办？tqdm 在 `_term_move_up` 里直接**放弃光标控制**
+（[`tqdm/utils.py#L370-L371`][tqdm-tmu]）：
+
+```python
+def _term_move_up():
+    return '' if (os.name == 'nt') and (colorama is None) else '\x1b[A'
+```
+
+返回空字符串——multi-bar 退化成"一条接一条地 print"，至少不会在 cmd.exe 里印出
+`^[[A` 之类的乱码。
+
+[colorama]: https://pypi.org/project/colorama/
+[tqdm-utils]: https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/utils.py#L14-L31
+
+### 6.3 两条路线对比
+
+| | 直接走 VTP（Blade） | 经 colorama（tqdm） |
+|---|---|---|
+| 最低 Windows 版本 | Windows 10 build 16257（2016+） | 任意（含 XP） |
+| 额外依赖 | 无（只用 ctypes 调 Win32 API） | colorama |
+| 性能 | 终端原生解析，零开销 | 每次写都被 Python 层劫持解析 |
+| 跨平台代码 | 加一个 `os.name == 'nt'` 分支 | 几乎无感（colorama 在 Linux 上 no-op） |
+| 复杂转义支持 | 100%（终端自己解析全部 CSI） | 限于 colorama 实现的子集 |
+
+2026 年这个时间点，**直接走 VTP 基本零成本**——Windows 7/8 早已停止支持，在用的
+Windows 都是 10/11；而新的 [Windows Terminal][win-term]（Microsoft 自家的现代终端
+app，预装于 Windows 11）天生就是 ANSI/VTP 友好的。Blade 这次重构走的就是这条路。
+如果你的程序追求"装了就能用、不要求 pip install colorama"，ctypes 那条路更省心。
+
+[win-term]: https://learn.microsoft.com/en-us/windows/terminal/
+
+### 6.4 别忘了 `isatty`
+
+VTP 开了不代表 stdout 真的是 TTY——用户可能 `app.exe > out.txt`。所以仍要叠加
+`sys.stderr.isatty()` 这一层。Blade 把这两件事在
+[`_console_support_cursor_control`][blade-ctrl] 里合并：
+
+```python
+# blade/src/blade/console.py:63
+def _console_support_cursor_control():
+    if os.name == 'nt':
+        # VTP gates both color and cursor escapes; if it's off, neither works.
+        return _windows_console_support_ansi_color() and sys.stderr.isatty()
+    return sys.stderr.isatty() and os.environ.get('TERM') not in ('emacs', 'dumb', '')
+```
+
+Linux/Mac 路径就一行（isatty + `TERM` 白名单）；Windows 多一道"先 VTP 检测/开启、
+再 isatty"。
+
+[blade-ctrl]: https://github.com/blade-build/blade-build/blob/295a44d/src/blade/console.py#L63-L68
+
+---
+
+## 七、用 curses 行不行？
 
 会有人问：Unix 不是有 `curses` 吗？为什么要自己手撸转义码？
 
@@ -384,25 +596,25 @@ curses 的抽象层级**太高**——它对"应用程序"友好，对"日志型
 
 ---
 
-## 七、我在 Blade 里掉过的坑（你自己实现的话大概率也会掉进去😄）
+## 八、我在 Blade 里掉过的坑（你自己实现的话大概率也会掉进去😄）
 
 我刚把 Blade 的 `console.py` 加固了一遍，锁、动态终端宽度、cursor 隐藏、各种残留清理。
 把踩到的坑全列出来，每个都对应一类 bug：
 
-### 7.1 行尾残留
+### 8.1 行尾残留
 
 **症状**：`99/100 99%` 跳到 `1/100 1%`，屏幕看到的是 `1/100 1%9%`。
 **原因**：单行 `\r` 覆写只覆盖前 N 个字符，不动后面。
 **修法**：写完每帧后追加 `\033[K`。多行版每行都要追加。
 
-### 7.2 数字位数变化导致行长抖动
+### 8.2 数字位数变化导致行长抖动
 
 **症状**：进度数字位数变化时，整行长度抖动，触发自动折行，重绘错位。
 **修法**：要么用定宽格式 `{:>3}/{:>3}`，要么用 `shutil.get_terminal_size()` 算可用
 宽度，**并主动留出至少 1 列 margin** 避免触发终端的自动折行。我就是被这个 +1 坑了
 （CodeQL 没抓住，UT 抓住了）。
 
-### 7.3 "颜色支持"和"光标控制支持"被当成一回事
+### 8.3 "颜色支持"和"光标控制支持"被当成一回事
 
 很多老代码（包括改前的 Blade）都用一个全局 `_color_enabled` 既决定颜色又决定要不要
 用 `\r`。但概念上：
@@ -413,23 +625,23 @@ curses 的抽象层级**太高**——它对"应用程序"友好，对"日志型
 非 TTY 但应用强行 `--color=yes` 的场景就会乱写 `\r` 进文件。Bazel 把 `--color` 和
 `--curses` 分成两个独立 flag 就是这个原因。
 
-### 7.4 进度条该写到 stderr
+### 8.4 进度条该写到 stderr
 
 `make` / `ninja` / `cargo` / `bazel` 都是这样。如果写 stdout，`blade build >
 out.txt` 会把进度条的字节流写进文件——一堆 `\r` 和未清的转义码。
 
-### 7.5 非 TTY 模式该彻底闭嘴，而不是退化成 `\n` 模式
+### 8.5 非 TTY 模式该彻底闭嘴，而不是退化成 `\n` 模式
 
 很多实现非 TTY 时改用 `\n` 终结每一帧，结果 CI 日志里堆几百行进度条。**该闭嘴就闭
 嘴**。
 
-### 7.6 并发"清—写"必须原子
+### 8.6 并发"清—写"必须原子
 
 清完进度条到下次重画之间，业务线程可能往同一个 stream 写消息。两个写序列交叉就花
 屏。修法：**一把全局锁包住"清 + 写 + 重画"**。Python 用 `threading.Lock`，Java
 用 `synchronized`。
 
-### 7.7 隐藏 cursor 后必须保证恢复
+### 8.7 隐藏 cursor 后必须保证恢复
 
 进度条期间隐藏 cursor（`\033[?25l`）很好看（消除行尾那个 blink block），但 Ctrl+C
 退出时如果没恢复，**用户终端会永久没有 cursor**——必须 `reset` 或 `stty echo` 才
@@ -443,7 +655,7 @@ atexit.register(restore_cursor)
 atexit 覆盖正常退出、`sys.exit()`、未捕获异常、`KeyboardInterrupt`。不覆盖
 `SIGTERM` / `SIGKILL` / 段错误——如果有这些场景需要兜底，得额外装信号处理器。
 
-### 7.8 log 文件 fd 要么 `with`，要么 atexit
+### 8.8 log 文件 fd 要么 `with`，要么 atexit
 
 `open()` 之后没 `close()` 不一定泄漏（解释器退出会收回），但 buffer 没 flush 出去
 就丢日志了。Blade 的 `_log = open(...)` 我加了 `atexit.register(_log.close)` —— 
@@ -452,7 +664,7 @@ atexit），用 `# lgtm[py/file-not-closed]` 抑制即可。
 
 ---
 
-## 八、谁想出来的（简短历史）
+## 九、谁想出来的（简短历史）
 
 这套多行进度条实现机制，我没有找到一个具体的发明人，虽然它自己出现不过十来年，但是背后是几十年终端的发展：
 
@@ -478,7 +690,7 @@ UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI �
 
 ---
 
-## 九、各语言常用库
+## 十、各语言常用库
 
 如果不想自己写，下面这些库已经把所有细节做对了：
 
@@ -497,13 +709,13 @@ UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI �
   - [`mpb`](https://github.com/vbauerster/mpb)：Multi-Progress-Bar，最像 Bazel 的
     Go 版。
 - **Java**
-  - Bazel 自家的 [`UiEventHandler.java`][handle-locked] 本身就是最佳参考，没有独立
-    成库。第三方有 [progressbar](https://github.com/ctongfei/progressbar) 但相对简
-    陋。
+  - Bazel 自家的 [`UiEventHandler.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/runtime/UiEventHandler.java)
+    本身就是最佳参考，没有独立成库。第三方有 [progressbar](https://github.com/ctongfei/progressbar)
+    但相对简陋。
 
 ---
 
-## 十、参考资料
+## 十一、参考资料
 
 **英文（讲原理）**
 
@@ -521,10 +733,10 @@ UI 选项"，到今天这套代码已经是 Bazel 用户每天都在看的 UI �
 
 **源码**
 
-- [Bazel `UiEventHandler.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/runtime/UiEventHandler.java) / [`UiStateTracker.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/runtime/UiStateTracker.java) — 本文反复引用的工业级实现
-- [Bazel `AnsiTerminal.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/util/io/AnsiTerminal.java) — 最底层的转义码封装，干净利落
+- [tqdm `tqdm/std.py` @ v4.67.3](https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/std.py) / [`tqdm/utils.py` @ v4.67.3](https://github.com/tqdm/tqdm/blob/v4.67.3/tqdm/utils.py) — 本文反复引用的 Python 端实现，`external_write_mode`、`moveto`、`_term_move_up` 都在这里
+- [Blade `console.py` @ 295a44d](https://github.com/blade-build/blade-build/blob/295a44d/src/blade/console.py) — 本文写作过程中我顺手加固的版本，文中讨论的所有坑都踩过 + 修过 + 写了单测；Windows VTP 检测 / 开启就在 [`_windows_console_support_ansi_color`](https://github.com/blade-build/blade-build/blob/295a44d/src/blade/console.py#L33-L53) 里
+- [Bazel `UiEventHandler.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/runtime/UiEventHandler.java) / [`UiStateTracker.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/runtime/UiStateTracker.java) / [`AnsiTerminal.java`](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/util/io/AnsiTerminal.java) — Java 端的工业级实现，刷新线程 + 锁的细节比 tqdm 多
 - [`indicatif/src/multi.rs`](https://github.com/console-rs/indicatif/blob/main/src/multi.rs) — Rust 端的对照实现
-- [Blade `console.py`](https://github.com/blade-build/blade-build/blob/master/src/blade/console.py) — 本文写作过程中我顺手加固的版本，本文里讨论的所有坑它都踩过 + 修过 + 写了单测
 
 ---
 
