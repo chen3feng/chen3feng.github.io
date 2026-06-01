@@ -15,6 +15,7 @@ published: true
 
 我这个年代的人，接触计算机时都是从那个黑乎乎的 DOS 字符界面开始的。最近几十年来字符界面
 的程序也越来越漂亮了，比如 conda 和 docker 之类的都有多行进度条。
+
 <img width="306" height="165" alt="image" src="https://github.com/user-attachments/assets/e2361114-64ad-44a9-a40c-2d3608bf49c3" />
 
 单行进度条的实现原理人尽皆知，十来年前 [Blade](https://blade-build.github.io/) 就已经支持了单行进度条，
@@ -30,6 +31,14 @@ published: true
 
 这篇笔记把这套机制从头到尾拆一遍。所有可运行代码用 Python，因为 ANSI 转义和具体语言
 无关，读着也不累。
+
+主要阅读了 [tqqm](https://github.com/tqdm/tqdm) 的源代码，这是是一个功能强大的
+Python 进度条库，常用于循环操作、文件处理、网络爬虫或机器学习模型训练中。它能在终端或
+命令行中实时显示进度百分比、已处理数量、预估剩余时间及处理速度。
+
+顺便说一下 tqdm 这个拗口又难记的名字。源自阿拉伯语字根 “taqaddum” (تقدّم)，意思是 
+“进展”或“进步”（progress）。同时，它也是西班牙语 “Te quiero demasiado” 的首字母缩写，
+意思是 “我太爱你（们）了”，这代表了作者对开源社区的喜爱。（是不是还是记不住，我也是😂）
 
 ---
 
@@ -415,9 +424,22 @@ for i in range(20):
 第五节那个最小可用版我特别注明了"在真终端跑"。Linux / macOS 上这句话默认成立。
 **Windows 上不一定**——这是一个独立的、值得拆开讲的话题。
 
-ANSI 转义码在 Windows 上历史上**不被原生支持**——`cmd.exe` 直到 Windows 10 build
-16257（2016 年的 Anniversary Update）才引入"Console Virtual Terminal Sequences"
-特性，**而且默认是关的**，必须程序自己显式开启。
+ANSI 转义码在 Windows 上历史上**不被原生支持**。
+
+Windows 起源于 DOS。ANSI.SYS 是 DOS 系列操作系统中的一个设备驱动程序，它允许程序通过
+在输出中插入 ANSI 转义序列来控制显示。但它并非默认安装，而且运行速度极慢。
+
+进入 Windows 时代，随着图形用户界面的普及，这套东西就基本丢了。如果程序想实现酷炫的效果，就得调 Console API。
+
+但是 Linux 崛起后，大量优秀的字符界面的应用程序涌入到 Windows 系统。纯命令行界面的程序还好说，
+各种用了 ANSI 转义序列的程序如果都改成调 API，移植成本就会很高。只能通过第三方程序提供基本的支持：
+
+- 自动拦截 ANSI 转义符并调用 Win32 API 处理颜色：如 Python 的 Colorama 库通过重定向 sys.stdout，使 Windows 支持彩色输出。
+- 注入式全局控制台外挂：如果不想或者不能修改程序代码，可以通过 API Hook 的方式拦截拦截控制台的显示输出流。最著名的是 ANSICON。
+- 第三方终端：绕开 Windows 自己的终端，自己实现。最著名的有 ConEmu/Cmder，MinTTY。
+
+但是官方支持却步履蹒跚，直到 Windows 10 build 16257（2016 年的 Anniversary Update）才在抛弃 cmd 重写的
+Windows Terminal 引入 "Console Virtual Terminal Sequences" 特性，**而且默认是关的**，必须程序自己显式开启。
 
 ### 6.1 检测 + 开启：`GetConsoleMode` / `SetConsoleMode`
 
