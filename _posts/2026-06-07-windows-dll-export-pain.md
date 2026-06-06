@@ -1,6 +1,6 @@
 ---
 title: "Windows DLL 导出之痛：从 dllimport 到构建系统"
-date: "2026-06-07 10:00:00 +0800"
+date: "2026-06-06 10:00:00 +0800"
 categories: [System, Build]
 tags: [Windows, DLL, dllexport, Import Library, CMake, Blade, MinGW, Linker]
 layout: post
