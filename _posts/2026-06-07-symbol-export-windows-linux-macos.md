@@ -1,6 +1,6 @@
 ---
 title: "符号导出三国志：Windows、Linux、macOS 动态库的导入导出机制"
-date: "2026-06-07 09:00:00 +0800"
+date: "2026-06-06 09:00:00 +0800"
 categories: [System, Linking]
 tags: [Dynamic Library, Linker, ELF, PE, Mach-O, GOT, PLT, dllimport, Visibility]
 layout: post
