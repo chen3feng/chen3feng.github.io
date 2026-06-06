@@ -11,6 +11,11 @@ lang: en
 # Change to your timezone › https://kevinnovak.github.io/Time-Zone-Picker
 timezone: Asia/Shanghai
 
+# Build posts whose date is "in the future" relative to the build time. Without
+# this, a post dated later than the deploy's UTC clock is silently skipped (a
+# post dated today in +0800 can be future at the UTC build moment).
+future: true
+
 # jekyll-seo-tag settings › https://github.com/jekyll/jekyll-seo-tag/blob/master/docs/usage.md
 # ↓ --------------------------
 
