@@ -4,7 +4,7 @@ date: "2026-06-08 09:00:00 +0800"
 categories: [System, Wine]
 tags: [Wine, PE, ELF, Syscall, FSGSBASE, TLS, ntdll, wineserver, IPC]
 layout: post
-published: false
+published: true
 ---
 
 > 一个 Windows 程序编译成 PE，Linux 的库编译成 ELF——两种格式天差地别，本来连放进同一个可执行文件都做不到。可 Wine 跑起来后，Windows 程序里一句 `CreateFile` + `ReadFile`，最终却落到了 ELF 里的 `open()`、`read()`。这中间到底经过了什么？拆开来看，背后藏着三种不同的"跨界"机制：进程内的 NT 系统调用门、进程内的 unixlib 门，以及一道跨进程通到"用户态微内核"的门。本文用打开并读一个文件这条线，把三者串起来讲清楚。顺带还有个隐藏难题：Linux 用 FS、Windows 用 GS 做线程本地存储，同一个线程怎么同时伺候两套约定？
