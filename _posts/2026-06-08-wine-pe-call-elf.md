@@ -9,6 +9,15 @@ published: true
 
 > 一个 Windows 程序编译成 PE，Linux 的库编译成 ELF——两种格式天差地别，本来连放进同一个可执行文件都做不到。可 Wine 跑起来后，Windows 程序里一句 `CreateFile` + `ReadFile`，最终却落到了 ELF 里的 `open()`、`read()`。这中间到底经过了什么？拆开来看，背后藏着三种不同的"跨界"机制：进程内的 NT 系统调用门、进程内的 unixlib 门，以及一道跨进程通到"用户态微内核"的门。本文用打开并读一个文件这条线，把三者串起来讲清楚。顺带还有个隐藏难题：Linux 用 FS、Windows 用 GS 做线程本地存储，同一个线程怎么同时伺候两套约定？
 
+前一阵子盘点各种二进制跨平台技术时，写了篇文章，简单提到了 Wine，它是一个可以在 Linux 或者 MacOS 上运行 Windows 可执行文件的工具。不过其实我只是大概了解它的基本原理，也就是 API 翻译，并没有深入研究过它的代码。
+
+但是今天在上班路上时，我突然想到了两个问题：
+
+- Wine 会把 Windows API 调用转为 Linux 中的翻译层，但是 ReadFile 不可能直接调到到 Linux 中的 read，因为两者存在的可执行文件格式都不一样，根本没法链接到一起。
+- 在 x86-64 上实现 TLS 时，Windows 和 Linux 的寄存器是反过来的，一个进程中怎么同时兼容两套机制？
+
+带着这两个问题，挖掘了一下源代码，都搞清楚了，记下来以免以后忘记 
+
 先简单介绍下 [Wine](https://www.winehq.org/)。它的名字是 "Wine Is Not an Emulator" 的递归缩写——刻意强调自己**不是模拟器**。它不模拟 CPU 指令，也不像虚拟机那样跑一整个 Windows 内核；它做的是**兼容层**：把 Windows 程序用到的那套 API（`kernel32`、`user32`、`ntdll` 等成百上千个 DLL）在 Linux/macOS 上**重新实现一遍**，让 Windows 的 `.exe` 直接当作本地进程跑起来。因为不带模拟，原生指令直接在 CPU 上执行，性能损失很小——代价是 Wine 必须自己把 Windows 那一整套运行时和加载机制在用户态搭出来。
 
 正因为"不模拟、不带内核"，今天这个朴素的好奇才有意思：Windows 程序最终还是得落到 Linux 的系统调用上才能干活。可问题是，Windows 的 `.exe` 是 **PE** 格式、调用的是 NT API；Linux 的 `.so` 是 **ELF** 格式、调用的是 Linux 系统调用。这两种东西**编译完格式完全不同，本来就不该出现在同一个 image 里**。
@@ -23,17 +32,19 @@ PE（Windows 的 `.exe` / `.dll`）和 ELF（Linux 的可执行文件和 `.so`�
 
 所以你没法像平时那样，把一个 Windows DLL 和一个 Linux `.so` 链接进同一个文件、互相 `call` 过去——它们各自的加载器谁也不认识对方。
 
-可 Wine 偏要让 Windows 程序在 Linux 进程里跑起来，最终还得调到 glibc 的 `read`、`write`、`open`。于是问题拆成几层：
+可 Wine 就是得让 Windows 程序在 Linux 进程里跑起来，最终还得调到 glibc 的 `read`、`write`、`open`。于是问题拆成几层：
 
 1. 怎么让 PE 模块和 ELF 模块**同时待在一个进程的地址空间里**？
 2. 待在一起之后，PE 里的代码怎么**调用**到 ELF 里的函数？
 3. 像"句柄"这种跨进程共享的东西，又是谁在管？
 
-打开一个文件，恰好把这三层全踩了一遍。
+一个看似简单的打开文件，涉及到了这三层面的东西。
 
 ## 二、先让它们共处一室
 
-Wine 的 `ntdll` 不是一个文件，而是**一分为二**的。打开 [dlls/ntdll/Makefile.in][mk] 头两行就点题了：
+对 Windows 系统稍有了解的都知道，kernel32 里的 API 只是个包装翻译层，真实的系统调用都是调 ntdll 中的 native API 实现的，因此我们绕过 kernel32，直接看 ntdll 是怎么实现的。
+
+挖掘源代码发现，Wine 的 `ntdll` 不是一个文件，而是**一分为二**的。打开 [dlls/ntdll/Makefile.in][mk] 头两行就点题了：
 
 ```make
 MODULE    = ntdll.dll      # PE 侧：交叉编译成真正的 PE，跑在 Windows 程序的地址空间里
@@ -238,9 +249,7 @@ SERVER_END_REQ;
 
 ## 七、贯穿两道门的难题：TLS 段寄存器
 
-**x86-64 上实现线程本地存储（TLS）时，Windows 和 Linux 选的段寄存器正好是反过来的**——一个用 GS，一个用 FS。这个差异我早就知道，单看任一个系统也没什么。可真正让我好奇的是：Wine 要让两套代码在**同一个线程**里来回切，这"反过来"该怎么办？前面机制一、机制二的汇编里反复出现的"切 FS 基址"，就是答案所在。
-
-它解决的是**两套约定打架**的问题。x86-64 上，TLS 靠**段寄存器的基址**定位，而 Linux 和 Windows 偏偏选了不同的寄存器：
+我早就知道**x86-64 上实现线程本地存储（TLS）时，Windows 和 Linux 选的段寄存器正好是反过来的**——一个用 GS，一个用 FS。
 
 | | 线程指针用哪个段寄存器 | 指向什么 |
 |---|---|---|
@@ -249,14 +258,14 @@ SERVER_END_REQ;
 
 （顺带一段历史：32 位时代正好反过来，Win32 用 FS 指 TEB，Linux 用 GS 做 TLS；到 64 位两边都"换了一只手"，最后恰好交叉。）
 
-矛盾就在这里：同一个 Wine 线程，**跑 PE 代码时 GS 必须指向 TEB**，否则 Windows API 拿不到线程信息；**跑 ELF 代码时 FS 必须指向 glibc 的 TCB**，否则 glibc 一碰 `errno`、一上锁就崩。
+这在一个系统里显然没问题，让我好奇的是：Wine 要让两套代码在**同一个线程**里来回切，这"反过来"该怎么解决呢？矛盾在这里：同一个 Wine 线程，**跑 PE 代码时 GS 必须指向 TEB**，否则 Windows API 拿不到线程信息；**跑 ELF 代码时 FS 必须指向 glibc 的 TCB**，否则 glibc 一碰 `errno`、一上锁就崩。
 
 Wine 的办法是**分工**：
 
 - **GS 全程留给 TEB。** Linux 上 GS 用户态本来基本闲着，Wine 接管它常驻指向 TEB。所以 PE 代码里 `%gs:0x30` 永远能拿到 TEB，派发器里 `movq %gs:0x378` 取 frame 也是这么来的。
 - **FS 在每次进/出门时切换。** 要执行 glibc 代码前把 FS 切回 glibc 的线程基址，回 PE 侧前再切回去。
 
-切 FS 这段就在派发器里，见 [signal_x86_64.c][udisp]：
+前面机制一、机制二的汇编里反复出现的"切 FS 基址"，就是答案所在。这段代码在派发器里，见 [signal_x86_64.c][udisp]：
 
 ```c
 #ifdef __linux__
@@ -271,12 +280,12 @@ Wine 的办法是**分工**：
 #endif
 ```
 
-这里藏着一个性能分水岭：
+值得注意的是这里有一个明显的跳转指令，其实藏着一个性能差异：
 
-- **CPU 支持 FSGSBASE**（Intel Ivy Bridge / AMD 2012 年起，且内核已开启）时，`wrfsbase` 是非特权指令，用户态十几纳秒就切完；
+- 如果**CPU 支持 FSGSBASE**（Intel Ivy Bridge / AMD 2012 年起，且内核已开启）指令，用户态十几纳秒就切完；
 - **不支持**时只能退回 `arch_prctl(ARCH_SET_FS)`——这是一次**真正的内核系统调用**，每次进出门都多几百纳秒。
 
-值不值得用 FSGSBASE，Wine 启动时会查 CPUID 并核对内核是否放行，存进 `user_shared_data`，见 [system.c][sys]：
+能不能用 FSGSBASE，Wine 启动时会查 CPUID 并核对内核是否放行，存进 `user_shared_data`，见 [system.c][sys]：
 
 ```c
 features[PF_RDWRFSGSBASE_AVAILABLE] = !!(regs[1] & (1 << 0));          // CPUID leaf 7
@@ -293,7 +302,7 @@ features[PF_RDWRFSGSBASE_AVAILABLE] &= !!(getauxval( AT_HWCAP2 ) & 2);  // 内�
 
 > Wine 先把 PE 模块和 ELF 模块装进同一个进程——ELF 由宿主 `dlopen` 加载，PE 由 Wine 自己写的加载器 `mmap` 进来。`CreateFile` 落到 `NtCreateFile`，经 **NT 系统调用门**（存上下文、把 **FS 段寄存器切回 glibc**）跨进 ELF 侧的实现；实现再经 **`wine_server_call`** 这道跨进程门，请 `wineserver` 真正 `open()` 文件、登记句柄。`ReadFile` 同样先过系统调用门，第一次经 `SCM_RIGHTS` 把真 fd 取回并**缓存**，之后就在进程内直接 `pread`，不再打扰 server。
 
-三种机制各司其职：
+三种机制职责分明：
 
 | 机制 | 边界 | 怎么调 | 开销量级 | 典型用途 |
 |---|---|---|---|---|
@@ -301,9 +310,9 @@ features[PF_RDWRFSGSBASE_AVAILABLE] &= !!(getauxval( AT_HWCAP2 ) & 2);  // 内�
 | `__wine_unix_call` | 进程内 PE→ELF | 按 `code` 查函数表 | 几十 ns | unixlib（驱动、网络、调试输出…） |
 | `wine_server_call` | **跨进程** | 管道 IPC + `SCM_RIGHTS` | 几 µs | 句柄、注册表、同步对象、窗口 |
 
-两套二进制格式没法在链接层面融合，Wine 就在**运行时**用软件的门把它们接起来；FS/GS 的分工，是为了让同一个线程能在两套世界里来回切身份还不出乱子；而把 fd 缓存进进程、少进 server，则是这套架构里最要紧的性能优化。
+这两套二进制格式没法在链接层面融合，Wine 就在**运行时**用软件的门把它们接起来；FS/GS 的分工，是为了让同一个线程能在两套世界里来回切身份还不出乱子；而把 fd 缓存进进程、少进 server，则是这套架构里最要紧的性能优化。
 
-说到底，Wine 是在用户态重建了一整套"**系统调用 + 内核**"：前两道门是用户态的系统调用，第三道门后面的 wineserver 是用户态的内核。一句普通的 `ReadFile`，就这样在 Linux 上走通了。
+所以说，Wine 是在用户态建了一套"**系统调用机制**"：前两道门是用户态的系统调用，这样，Windows 上的 `ReadFile`，就这样在 Linux 上走通了。
 
 想起当年刚学编程时，看过不少台湾的计算机图书作译者侯捷的书，他说过一句话：“源码面前，了无秘密“。这种通过挖掘源码破解疑惑的感觉还是挺美妙的。
 
