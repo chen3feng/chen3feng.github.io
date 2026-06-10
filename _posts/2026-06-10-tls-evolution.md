@@ -266,7 +266,7 @@ fmt.get().format(date);   // 每个线程各拿各的 SimpleDateFormat
 - **TLSDESC（TLS 描述符）**：对 global/local-dynamic 的重写，用「描述符 + resolver」取代那次又慢又要全局锁的 `__tls_get_addr`。动态链接器能给静态 TLS 区的模块填一个「直接返回常量 tpoff」的快 resolver，只给真正惰性的模块填慢的。于是**「动态模型必慢」这个老叙事被改写**——TLSDESC 下 GD 能快到接近 initial-exec。它在 **AArch64 上已是默认**，x86/ARM 上靠 `-mtls-dialect=gnu2` 选用，RISC-V 2024 年才补上。
 - **musl vs glibc**：同一个 ELF ABI，两种实现选择。glibc 惰性分配（首次访问可能 `malloc`，带来著名的信号不安全问题）；**musl 干脆在 `dlopen` 时就为所有线程急切分配好**——本质选了「Windows 式急切」，用 dlopen 多干活换访问期简单和信号安全。
 - **TCB 不再只住 `__thread` 变量**：线程指针指向的 TCB 区，如今挤进了越来越多「内核 / libc 也要用」的东西。最典型的是 **rseq（restartable sequences，可重启序列；Linux 4.18 引入，glibc 2.35 起每线程自动注册）**——它在 TLS 里放一个 `struct rseq`，**内核每次返回用户态都把当前 CPU 号写进去**，于是用户代码一条 TLS load 就知道「我跑在哪个 CPU 上」，不用系统调用。再配上「线程在临界区中途被抢占或迁移到别的 CPU，就由内核跳到 abort 处理把这段重跑一遍」的机制，就能写出**无锁的 per-CPU 数据结构**：per-CPU 计数器、内存分配器的 per-CPU 快路径（tcmalloc、jemalloc 都用了它）。加上前面提过的栈 canary、pointer guard，**线程指针区早已不只是「存你的线程局部变量」的地方了**。
-- **经典文档该更新了**：Ulrich Drepper 的《ELF Handling for Thread-Local Storage》至今是这领域的骨架标准，但它（最后修订也在十多年前）该补上 TLSDESC、AArch64/RISC-V、`thread_local` 的动态初始化层、静态 TLS 余量这个运维现实，以及上面这些 TCB 新住户。
+- **经典文档该更新了**：Ulrich Drepper 的 [《ELF Handling for Thread-Local Storage》](https://www.akkadia.org/drepper/tls.pdf) 至今是这领域的骨架标准，但它（最后修订也在十多年前）该补上 TLSDESC、AArch64/RISC-V、`thread_local` 的动态初始化层、静态 TLS 余量这个运维现实，以及上面这些 TCB 新住户。
 
 ---
 
@@ -283,3 +283,12 @@ fmt.get().format(date);   // 每个线程各拿各的 SimpleDateFormat
 Windows 赌「预分配换零调用」，吃了 `LoadLibrary` 和静态预算的亏；Linux 选「惰性换灵活」，于是默认慢、又造出四模型让你手动拨快；macOS 统一成一条调用路，简单但永远多一脚；Java 干脆把整套搬到托管层，换来安全和跨类加载，代价是一次哈希探查和一个泄漏陷阱。
 
 没有免费的午餐——这大概是「深入二进制」这些底层机制反复教给我们的同一件事。
+
+---
+
+## 参考与延伸阅读
+
+写这篇时主要参考了两份作品，也推荐给想深入的读者：
+
+- Ulrich Drepper，[《ELF Handling For Thread-Local Storage》](https://www.akkadia.org/drepper/tls.pdf)——ELF TLS ABI 的奠基文档，数据结构、四种访问模型、各架构重定位的源头，至今是这领域的骨架标准。
+- Fangrui Song（MaskRay，LLVM lld 维护者），[《All about thread-local storage》](https://maskray.me/blog/2021-02-14-all-about-thread-local-storage)——ELF / 链接器视角的权威参考，把重定位类型、**链接器 relaxation**、TLSDESC 写到了指令级。本文有意没在这些细节上展开，而是走另一条线：**演化脉络、三平台对比、以及托管运行时**。想深挖 ELF 链接器层面，去读这篇，是目前最好的资料。
