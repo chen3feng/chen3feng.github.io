@@ -59,6 +59,22 @@ orb run -m jammy-x86 uname -m   # x86_64
 
 把 blade 的源码挂进去，Linux 侧的构建/测试就跑起来了。需要测「干净环境」时，删掉重建一台也只是几秒钟的事。
 
+而**容器方式**（我日常更常用）更轻：OrbStack 自带 Docker 引擎，`docker` 命令开箱即用，不用单独装 Docker Desktop，镜像里的文件和网络也都和 Mac 无缝打通：
+
+```bash
+# 起一个干净容器，用完即焚
+docker run --rm -it ubuntu
+
+# x86_64 容器（走 Rosetta），输出 x86_64——同一台机器顺手测另一种架构
+docker run --rm --platform linux/amd64 ubuntu uname -m
+
+# 把当前目录（blade 工作区）挂进容器，装好依赖跑一遍构建/测试
+docker run --rm -v "$PWD":/src -w /src ubuntu \
+  bash -lc "apt-get update -qq && apt-get install -y -qq ninja-build python3 git && ./blade test //base/..."
+```
+
+容器秒起秒删、天然干净，特别适合「每次都从零验证一遍」的 CI 式用法；同一份 `--platform linux/amd64` 还能把 x86_64 也顺手覆盖掉。
+
 > 容器和虚拟机的取舍：**我其实容器用得更多**——纯构建/测试容器就够、也更轻；只有需要 systemd、内核模块、或更接近完整系统的行为时，才上它的 Linux machine（轻量 VM）。
 
 ## Windows：虚拟机 + MSVC 工具链 + SSH
