@@ -11,7 +11,7 @@ published: true
 
 ## 起因：一个构建系统逼出来的三平台需求
 
-最近一段时间我在给 [blade](https://github.com/chen3feng/blade-build) 补 **macOS 和 Windows** 支持，其中 Windows 深到 MSVC 工具链的各种细节：DLL 导出（见 [《Windows DLL 导出之痛》]({% post_url 2026-06-07-windows-dll-export-pain %}) 和 [《符号导出三国志》]({% post_url 2026-06-07-symbol-export-windows-linux-macos %})）、调试信息、覆盖率、PGO、clang-cl 路由……为了不闭门造车，我还把 blade 直接拿去构建真实的开源项目 dogfooding——Windows 侧有 Notepad++、7-Zip、PuTTY，Linux 侧有 [Tencent/flare](https://github.com/Tencent/flare) 这类大型 C++ 项目。
+最近一段时间我在给 [blade](https://blade-build.github.io/) 补 **macOS 和 Windows** 支持，其中 Windows 深到 MSVC 工具链的各种细节：DLL 导出（见 [《Windows DLL 导出之痛》]({% post_url 2026-06-07-windows-dll-export-pain %}) 和 [《符号导出三国志》]({% post_url 2026-06-07-symbol-export-windows-linux-macos %})）、调试信息、覆盖率、PGO、clang-cl 路由……为了不闭门造车，我还把 blade 直接拿去构建真实的开源项目 dogfooding——Windows 侧有 Notepad++、7-Zip、PuTTY，Linux 侧有 [Tencent/flare](https://github.com/Tencent/flare) 这类大型 C++ 项目。
 
 这一下问题就来了：blade 是个跨 Linux / macOS / Windows 的构建系统，改一处逻辑，得确认**三个平台都没退化**；dogfooding 又要求有**真实的工具链环境**能跑能链能测。而我手头主力是一台 **Apple Silicon 的 MacBook Pro**。
 
