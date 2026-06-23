@@ -1,5 +1,5 @@
 ---
-title: "一台 MacBook Pro 跑通 Linux/Windows 开发与测试"
+title: "一台 MacBook Pro 上跑通 Linux/Windows 开发与测试"
 date: "2026-06-22 21:00:00 +0800"
 categories: [Tooling, Environment]
 tags: [macOS, Apple Silicon, Linux, Windows, OrbStack, VMware Fusion, UTM, Visual Studio, ARM64, SSH, Blade]
@@ -11,15 +11,17 @@ published: true
 
 ## 起因：一个构建系统逼出来的三平台需求
 
-先说点背景。最近换了新工作，又开始重度使用 C++；再加上这一波 AI 编程的火爆，我就想着一边补一补这几年 C++ 的新知识，一边亲身感受 AI 编程的能力。于是工作之余，重新拾起了先前开源的 [blade](https://blade-build.github.io/) 构建系统来折腾。
+先说点背景。最近换了新工作，又开始重度使用最新版的 C++；再加上这一波 AI 编程的火爆，我就想着一边补一补这几年 C++ 的新知识，一边全力亲身感受 AI 编程的能力。于是工作之余，重新拾起了先前开源的 [blade](https://blade-build.github.io/) 构建系统来折腾。
 
-这段时间主要在给 blade 补 **macOS 和 Windows** 支持，**深入到三个平台、三套工具链（gcc / clang / MSVC）的各种细节**：比如 Windows 侧的 DLL 导出（见 [《Windows DLL 导出之痛》]({% post_url 2026-06-07-windows-dll-export-pain %}) 和 [《符号导出三国志》]({% post_url 2026-06-07-symbol-export-windows-linux-macos %})）、调试信息、覆盖率、PGO、clang-cl 路由……为了不闭门造车，我还把 blade 直接拿去构建真实的开源项目 dogfooding——Windows 侧有 Notepad++、7-Zip、PuTTY，Linux 侧有 [Tencent/flare](https://github.com/Tencent/flare) 这类大型 C++ 项目。
+这段时间主要在给 blade 补 **macOS 和 Windows** 支持，**深入到了三个平台、三套工具链（gcc / clang / MSVC）的各种细节**，也都记录下来了：比如 Windows 侧的 DLL 导出（见 [《Windows DLL 导出之痛》]({% post_url 2026-06-07-windows-dll-export-pain %}) 和 [《符号导出三国志》]({% post_url 2026-06-07-symbol-export-windows-linux-macos %})）、调试信息、覆盖率、PGO、clang-cl 路由……。
 
-这一下问题就来了：blade 是个跨 Linux / macOS / Windows 的构建系统，改一处逻辑，得确认**三个平台都没退化**；dogfooding 又要求有**真实的工具链环境**能跑能链能测。而我手头主力是一台 **Apple Silicon 的 MacBook Pro**。
+为了不闭门造车，我还把 blade 直接拿去构建真实的开源项目 dogfooding——Windows 侧有 Notepad++、7-Zip、PuTTY，Linux 侧有 [Tencent/flare](https://github.com/Tencent/flare) 这类大型 C++ 项目。
+
+这一下问题就来了：blade 是个跨 Linux / macOS / Windows 的构建系统，改一处逻辑，得确认**三个平台都没问题**；dogfooding 又要求有**真实的工具链环境**能跑能链能测。而我手头主力是一台 **Apple Silicon 的 MacBook Pro**，没有 Linux，更没有 Windows 机器。
 
 起初我靠 GitHub Actions 跑多平台 CI 来验证，但**改一行就要等一整轮 workflow 才有反馈**，循环太慢——这种贴着工具链反复试的活儿，本地能即时构建测试才跟得上节奏。
 
-于是目标很明确：**一台 Mac，同时是 macOS、Linux、Windows 三套目标平台的开发测试机**，而且因为是 ARM 芯片，还得顺带覆盖 ARM/x86 两种架构。
+于是目标很明确：**一台 Mac，同时是 macOS、Linux、Windows 三套目标平台的开发测试机**，而且因为是 ARM64 芯片，还得顺带覆盖 ARM64/x86 两种架构。
 
 下面是我最后落地的方案。
 
@@ -35,6 +37,8 @@ published: true
 
 ## Linux：OrbStack 跑容器和虚拟机
 
+要在 macOS 上创建 Linux 环境，首先想到的是 Docker，但是 Docker Desktop 很重，启动慢，CPU和内存消耗都很大，于是就有了其他竞品。
+
 [OrbStack](https://orbstack.dev/) 是 macOS 上的 Docker 容器 + Linux 虚拟机方案，定位类似 Docker Desktop + multipass，但**快得多、省电得多**，而且**对个人用户免费**（商用需付费）。对我这种「随时起一个干净 Linux 验证一下」的用法非常合适。
 
 几个我看重的点：
@@ -42,8 +46,10 @@ published: true
 - **启动快、占用低**。起一台 Linux machine 是秒级的，内存按需占用、空闲几乎不耗电——比常驻的重虚拟机友好太多，对笔记本续航很关键。
 - **ARM 原生 + x86 模拟一把抓**。M 系列上它默认跑 ARM64，但能**依赖 Rosetta 2** 跑 `amd64` 容器/二进制。对 blade 来说，这意味着**同一台机器就能测 Linux 的两种架构**：ARM64 验证原生行为，x86_64 模拟跑一遍确认没有架构假设。
 - **零配置的网络与文件共享**，外加自动的 SSH 和 `machine.orb.local` 域名，`orb` / `orbctl` 命令行直接进。Mac 和 Linux 之间互访文件基本无感。
+- **同时支持虚拟机和容器**
+- 对个人用户**免费**
 
-典型用法：
+虚拟机方式的典型用法：
 
 ```bash
 # 装好后，创建不同发行版的机器
@@ -79,27 +85,33 @@ docker run --rm -v "$PWD":/src -w /src ubuntu \
 
 ## Windows：虚拟机 + MSVC 工具链 + SSH
 
-Windows 这边没法走「贴着原生跑」的捷径，得开一台真正的虚拟机。Apple Silicon 上能装的是 **Windows 11 on ARM**（微软已提供 ARM64 ISO），x86/x64 程序由系统的模拟层跑。
+对于 Windows 系统，我一开始考虑过基于 Wine 的方案，如 wine 命令行版或者商业版的 Crossover，但是 Wine 毕竟只是 API 翻译，日常运行一些软件包括游戏来说还行，跑开发和测试工具兼容性就远远不够了。
+
+因此 Windows 这边没法走「接近原生跑」的捷径，得开一台真正的虚拟机。
 
 ### 选 hypervisor：VMware Fusion 还是 UTM
+
+macOS 上能运行 Windows 的免费的虚拟机主要有两款：
 
 - **VMware Fusion**：个人使用现在免费了，对 Apple Silicon 上的 Windows 11 ARM 支持成熟，网络/共享/快照都顺手。默认 NAT 网段是 `172.16.x.x`，宿主 Mac 能直接访问 guest（后面 SSH 要用到）。
 - **UTM**：开源、基于 QEMU。既能虚拟化 ARM Windows，也能**纯模拟 x86 Windows**（慢，但偶尔需要验证 x86 原生系统时有用）。
 
-两者我都装了 ARM64 的 Windows 11，实测下来 **Fusion 明显快一些**，就以它为主；UTM 留作需要纯模拟 x86 系统时的备选。
+Apple Silicon 上能装的是 **Windows 11 on ARM**（微软已提供 ARM64 ISO），还能通过通过 Prism 兼容层支持直接运行 x86/x64 程序。
+
+两者我都装了 ARM64 的 Windows 11，实测下来 **Fusion 明显快一些**，就以它为主；UTM 留作备用。
 
 ### 装 Visual Studio 2022 + 2026 Build Tools（含 ARM 编译器）
 
-Windows 上最主流的 C++ 编译器显然是 Visual C++。但**不需要完整 IDE**，装 **Build Tools** 就够——它只给 MSVC 工具链、SDK 和链接器，没有 IDE 那套 GUI，体积小、适合当构建机。这里也有现实考量：**完整 IDE 太占空间**，而 MBP 只有 1T SSD；前阵子一块加密移动 SSD 突然解不了密、数据全丢的经历，让我对磁盘空间和「能省则省」格外敏感。
+要在 Windows 上做 C++ 开发，就回避不了 Windows 上最主流的 Visual C++ 编译器。但**不需要完整 IDE**，装 **Build Tools** 就够——它只给 MSVC 工具链、SDK 和链接器，没有 IDE 那套 GUI，体积小、适合构建机。这里也有现实考量：**完整 IDE 太占空间**，而 MBP 只有 1T SSD；过去我把代码放在加密的移动 SSD 上，后来突然解不了密、数据全丢的经历，让我对移动硬盘的可靠性心有余悸，还是放内置硬盘上更稳妥一些，因此空间上还是能省则省。
 
-我同时装了 **2022 和 2026 两套 Build Tools**，有两个目的。一是**测 blade 对不同 MSVC 版本的兼容性**——工具链跨大版本时，默认开关、调试信息格式、链接器行为都可能有差异，dogfooding 时多版本并存能尽早暴露问题。二是**验证 blade 自动发现已安装编译器的能力**——多版本并存正好考验它能不能正确探测、识别并挑出该用的那套工具链。VS 的 Build Tools 支持多版本并排安装，互不干扰。
+我同时装了 **2022 和 2026 两套 Build Tools**。有两个目的：一是**测 blade 对不同 MSVC 版本的兼容性**——工具链跨大版本时，默认开关、调试信息格式、链接器行为都可能有差异，dogfooding 时多版本并存能尽早暴露问题。二是**验证 blade 自动发现已安装编译器的能力**——多版本并存正好考验它能不能正确探测、识别并挑出该用的那套工具链。VS 的 Build Tools 支持多版本并排安装，互不干扰。
 
-装的时候要**手动勾上 ARM 相关的编译器组件**——这是 ARM 虚拟机上最容易踩的点：**默认安装只给 x86-64 的编译器，哪怕你装在 ARM64 Windows 上也一样**，不手动选 ARM 组件，编出来的仍是 x64。
+如果要测试 ARM64 原生构建，装的时候要**手动勾上 ARM 相关的编译器组件**——这是 ARM 虚拟机上最容易踩的点：**默认安装只给 x86-64 的编译器，哪怕你装在 ARM64 Windows 上也一样**，不安装 ARM 目标组件，编译结果就只支持 x64。
 
 - **ARM64 native**：在 ARM64 Windows 上原生跑的 `cl.exe`，直接编 ARM64 目标，不经模拟，速度最好。
-- **ARM64/ARM64EC + x64/x86 交叉编译器**：一台机器上把 blade 要覆盖的 target 架构都配齐。
+- **ARM64/ARM64EC + x64/x86 交叉编译器**：编译出 x86/64 目标。
 
-> 小心 host/target 的组合：ARM64 上既有「ARM64 host → ARM64 target」的原生工具链，也有「x64 host（模拟）→ ARM64 target」的交叉工具链。能用原生就别用模拟 host，构建快很多。`vcvarsall.bat` / `vcvarsarm64.bat` 选对那套环境。
+这样一台机器上就把 blade 要覆盖的 target 架构都配齐了。
 
 ### 装 OpenSSH Server：把 Windows 变成「终端里的远程机」
 
@@ -123,33 +135,33 @@ ssh cf@172.16.86.128      # Fusion 的 NAT 地址
 
 这里有**两个真实的坑**，写脚本时专门处理了：
 
-1. **没设密码的账户连不上**。Windows 默认禁止「空密码账户」走网络登录（安全策略 `LimitBlankPasswordUse`），所以密码认证这条路在没设密码时根本走不通——**密钥认证是唯一的路**。这反而更安全，正好顺势上密钥。
+1. **没设密码的账户连不上**。通常为了方便本地虚拟机都不设密码，但是 Windows 默认禁止「空密码账户」走网络登录（安全策略 `LimitBlankPasswordUse`），所以密码认证这条路在没设密码时走不通——**密钥认证是唯一的路**。这反而更安全，正好顺势上密钥。
 2. **管理员账户的 authorized_keys 位置不一样**。普通用户放 `~\.ssh\authorized_keys`，但**管理员账户** sshd 只认 `C:\ProgramData\ssh\administrators_authorized_keys`，且该文件 ACL 必须只给 Administrators + SYSTEM，否则被忽略。更隐蔽的是：判断「是不是管理员」要看**组成员身份**，不能看「当前会话是否提权」——UAC 过滤后的非提权 token 会把 Administrators 组摘掉，照它判断会把公钥写错地方，导致登录一直失败。脚本里用 `Get-LocalGroupMember` 直接查成员身份，绕开了这个陷阱。
 
 ## 串起来：一台机器的日常
 
-我一开始是 Mac 和 Windows 两边分别开发，结果越来越麻烦——尤其用 Claude Code 时，**两台机器上的会话无法共享**，上下文得靠 GitHub issue 来回中转。后来索性收敛成「**Mac 为主、SSH 驱动其它平台**」：源码和编辑都在 Mac，构建测试推到各目标平台去跑。
+其实再搞定 Windows SSH Server 之前，我一开始是 Mac 和 Windows 两边分别开发，结果越来越麻烦——尤其用 Claude Code 时，**两台机器上的会话无法共享**，上下文得靠 GitHub issue 来回中转。装好。SSH 后就收敛成「**Mac 为主、SSH 驱动其它平台**」：源码和编辑都在 Mac，构建测试推到各目标平台去跑。
 
 配齐之后，日常长这样：
 
 - 代码统一在 Mac 上编辑。
-- Linux 验证：`orb run -m ubuntu blade test ...`，要测架构差异就切到 x86_64 那台。
-- Windows 验证：`ssh` 进 Fusion 的 Windows VM，`blade build` / `blade test` 跑 MSVC，多版本 Build Tools 之间切换确认兼容。
 - macOS 原生直接本机跑。
+- Linux 验证：通过 OrbStack 进行，arm64 和 x64 都没问题。
+- Windows 验证：`ssh` 进 Fusion 的 Windows VM，通过分支同步代码，`blade build` / `blade test` 跑 MSVC，多版本 Build Tools 之间切换确认兼容。
 
-改一处 blade 的逻辑，三平台的回归在同一台笔记本上、基本都在终端里就能转一圈；dogfooding 那几个真实项目（Notepad++ / 7-Zip / PuTTY / flare）也是在这套环境里构建的。
+改一处逻辑，在同一台笔记本上完成回归，除了测图形界面的程序外，基本都在终端里就能搞定。
 
-其实环境一搭好，这套流程**日常主要是交给 Claude 用**——它通过这些 SSH / 容器连进各平台跑构建和测试，大多数时候并不需要我亲自去敲命令。我更多是在「定方向、看结果」。
+其实这套环境**日常主要是交给 Claude 用**——它通过这些 SSH / 容器连进各平台跑构建和测试，大多数时候并不需要我亲自去敲命令。我更多是在「定方向、看结果」。
 
 ## 一些经验
 
 - **能原生别模拟**：OrbStack 的 ARM64 容器、Windows 的 ARM64-host 工具链，都比走模拟快得多；模拟（x86 容器、x64-host 交叉、UTM 纯模拟）留给「确实要验证那个架构」的场景。
-- **快照是命根子**：折腾工具链、改系统配置前先打快照。Build Tools 多版本并存、注册表改 sshd 默认 shell 这类操作，出问题能秒回滚。
 - **网络早确认**：连不上 Windows VM 多半是 VM 网络模式问题。Fusion 的 NAT 一般宿主可直连 `172.16.x.x`；要从局域网别的机器访问就得桥接或端口转发。
 - **时间/时区**：虚拟机和容器的时钟漂移会让构建时间戳、证书校验、甚至「未来日期」类逻辑出怪事（这个我在博客部署上吃过亏），值得顺手校一下。
+- 大部分事情都能让 AI 帮你搞定，不过很多时候还是需要你来指明方向，所以原理还是得懂。
 
 ## 结语
 
-「一台 MacBook Pro 同时开发测试 Linux 和 Windows」听起来折腾，落地下来其实就三块拼图：**OrbStack 把 Linux 做成秒起秒删的轻量资源，VM + Build Tools 给出真实的 MSVC（含 ARM）环境，SSH 把 Windows 收进终端**。对我这种要在三平台之间反复横跳验证构建系统的人，这套组合把「切平台」的成本压到了很低——大部分时候，不用离开终端。
+「一台 MacBook Pro 同时开发测试 Linux 和 Windows」听起来折腾，落地下来其实就三块：**OrbStack 把 Linux 做成秒起秒删的轻量资源，VM + Build Tools 给出真实的 MSVC（含 ARM）环境，SSH 把 Windows 收进终端**。对我这种要在三平台之间反复横跳验证构建系统的人，这套组合把「切平台」的成本压到了很低——大部分时候，不用离开终端。
 
-而且都说 AI 时代 CLI 是最适配的交互模式：可编排、可远程、纯文本进出。这回我把整套环境收进终端、再大半交给 Claude 驱动，亲自实践了一把——真香。
+最近都说 AI 时代 CLI 是最适配的交互模式：可编排、可远程、纯文本进出，token 消耗低。这回我把整套环境收进终端、再大部分交给 Claude 驱动，亲自实践了一把——真香。
