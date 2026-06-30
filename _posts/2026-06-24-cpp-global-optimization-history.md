@@ -1,5 +1,5 @@
 ---
-title: "把优化器的视野放大：C++ 全局优化技术简史（PGO / LTO / AutoFDO / BOLT）"
+title: "深入二进制系列：C++ 全局优化技术简史"
 date: "2026-06-24 21:00:00 +0800"
 categories: [Compiler, Performance]
 tags: [C++, Compiler, Optimization, PGO, LTO, ThinLTO, AutoFDO, BOLT, GCC, LLVM, Clang, MSVC]

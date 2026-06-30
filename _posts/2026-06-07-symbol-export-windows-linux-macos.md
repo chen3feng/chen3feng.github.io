@@ -195,4 +195,8 @@ when making a shared object; recompile with -fPIC
 
 - Ulrich Drepper, [*How To Write Shared Libraries*](https://akkadia.org/drepper/dsohowto.pdf) —— ELF/DSO 机制的权威长文。本文 Linux 部分涉及的 GOT/PLT、符号可见性、符号抢占（preemption）、copy relocation、`-fvisibility=hidden` 等，这里都有更深入的展开，想吃透 ELF 动态库必读。
 - Raymond Chen, [*Index to the series on DLL imports and exports*](https://devblogs.microsoft.com/oldnewthing/20060727-04/?p=30333) —— 微软 Raymond Chen 2006 年关于 Windows DLL 导入/导出的系列总目（含「导入库里的名字为何要修饰」「32 位 Windows 如何导出 DLL 函数」等），正对应本文 Windows 部分的 IAT / thunk / 导入库 / `dllimport` 机制。
+- Fangrui Song (MaskRay), [*ELF interposition and -Bsymbolic*](https://maskray.me/blog/2021-05-16-elf-interposition-and-bsymbolic) —— LLVM lld 维护者写的，现代最精确的符号抢占（interposition）讲解：flat namespace 为何默认可抢占、`-Bsymbolic` / `--dynamic-list` 如何按住它。想深究本文「Linux 默认可抢占」那一节看这篇。
+- Fangrui Song (MaskRay), [*Copy relocations, canonical PLT entries and protected visibility*](https://maskray.me/blog/2021-01-09-copy-relocations-canonical-plt-entries-and-protected-visibility) —— 专讲 copy relocation 与 `STV_PROTECTED`（「可见但不可抢占」为何在工具链上一直别扭），正对应本文 macOS「纯 GOT、不碰 copy reloc」的对比。
+- Ian Lance Taylor, [*Linkers* 系列](https://www.airs.com/blog/archives/38)（2007，20 篇） —— gold 链接器作者写的链接器全景，符号解析、可见性、共享库语义的来龙去脉，适合补「为什么会演化成这样」的历史视角。
+- GCC Wiki, [*Visibility*](https://gcc.gnu.org/wiki/Visibility) —— 实操向：`-fvisibility=hidden` + `__attribute__((visibility))` + export map / version script 把符号局部化的标准姿势；配合 binutils `ld` 的 `--exclude-libs`、`--dynamic-list` 与 macOS `ld` 的 `-unexported_symbols_list` / `-load_hidden`，就是「静态链进第三方库但不导出」那条路。
 
