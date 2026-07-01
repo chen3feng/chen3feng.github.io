@@ -188,6 +188,16 @@ Google 的 **gperftools** 以 **tcmalloc**（高性能内存分配器）为核�
 
 Sanitizer 今天是 C++ 内存排错的绝对主力，`-fsanitize=address,undefined` 几乎是 CI 标配。但注意它的定位：**它是「测试期动态检测」，不是「生产期防护」**——你得让**测试真的覆盖到出错的路径**，它才抓得到。没跑到的代码，它一无所知。这是所有动态检测的共同天花板。
 
+### 模糊测试（Fuzzing）：自动喂出「会让它崩」的输入
+
+上面那个天花板——「**得先跑到**」——正是 **Fuzzing（模糊测试）** 要解决的。思路是自动生成海量畸形 / 随机输入去猛灌程序，撞出崩溃和异常。这个词是 Barton Miller 1988 年在威斯康星大学提出的，早期就是「盲目乱灌」（dumb fuzzing），效率有限。
+
+真正的飞跃是**覆盖率引导（coverage-guided）**：**AFL（American Fuzzy Lop，Michał Zalewski，2013）** 用编译期插桩记录每个输入走过的代码路径，再用类似遗传算法的思路**留下能探到新路径的输入、继续变异**，像进化一样一步步钻进程序深处。**libFuzzer**（LLVM，进程内）是同思路的库化版本。
+
+**Fuzzing 和 Sanitizer 是天作之合**：Fuzzer 负责「找到会触发 bug 的输入」（广度），Sanitizer（ASan/UBSan/MSan）负责「把那一刻的内存错误精确抓出来」（精度）——一个探路、一个定罪。这套组合是今天挖内存漏洞的主力打法。Google 更把它工业化成了 **OSS-Fuzz**（2016）：给几百个重要开源项目挂上 7×24 的持续 fuzzing，累计找出了**数以万计**的漏洞（其中大量是内存安全问题）。同类还有社区维护的 **AFL++**、Google 的内核 fuzzer **syzkaller**、**honggfuzz** 等。
+
+> Fuzzing 补的正是 Sanitizer「得跑到」的洞，但它也不是万能：它擅长「有明确输入入口」的解析器、编解码器、协议、文件格式，对那些需要复杂前置状态或特定业务逻辑才能触发的深层路径，依旧力不从心。
+
 ## 第三条路：编译器与库加固——静态拦截 + 运行时兜底
 
 第三条路不改你的代码结构，而是让**编译器和标准库更聪明地帮你挡**：有些在编译期就报警，有些悄悄插入运行时检查。
@@ -220,16 +230,23 @@ strcpy(buf, src);   // 开 _FORTIFY_SOURCE 后 → __strcpy_chk(buf, src, 10)
 
 它的妙处是**几乎零成本、对源码零侵入**——重编一下就有，能算出大小的地方自动加保护，算不出的地方原样放行。`_FORTIFY_SOURCE` 有 `1`/`2`/`3` 三档，级别越高检查越严。这是发行版默认给系统软件加的一道「免费护栏」。
 
-### 系统级加固：让漏洞更难被利用
+### 系统级加固：CPU + OS + 链接器联手，让漏洞「打不穿」
 
-还有一类不「消除」漏洞，而是**让漏洞更难被利用成功**的加固，多在编译器 + 链接器 + 操作系统协作层面：
+还有一大类技术不去「消除」漏洞，而是**让漏洞即使存在也难以被利用成功**——它们是一整套「利用缓解（exploit mitigation）」：**CPU 提供硬件机制，操作系统 / 加载器 / 编译器协同启用**。这是内存安全里最依赖硬件的一层，值得专门看看「谁提供、谁管理、谁受益」的配合关系：
 
-- **栈金丝雀（stack canary）**：StackGuard（Crispin Cowan，1998）、ProPolice 的思路，在返回地址前放一个哨兵值，函数返回前检查它有没有被踩坏——挡栈溢出改返回地址。GCC 的 `-fstack-protector-strong` 是今天的常规配置。
-- **ASLR / DEP(NX)**：地址随机化让攻击者猜不到地址，数据页不可执行让注入的代码跑不起来。（ASLR 依赖 PIE，而 PIE 又和重定位相关——这块我在[《链接器发展简史》]({% post_url 2026-07-01-linker-evolution-history %}) 里讲 RELR 时提到过。）
-- **CFI（控制流完整性）**：`-fsanitize=cfi`、Intel CET 的影子栈 + 间接分支跟踪，防止劫持控制流。
-- **硬件方案**：ARM 的 **MTE（内存标签扩展）** 给每块内存和指针打 tag，不匹配就报错——相当于把 ASan 做进硬件、开销低到能上生产；**PAC（指针认证）** 给指针签名防篡改；学术界的 **CHERI** 更激进，用「胖指针（capability）」从硬件层面强制空间和时间安全。
+- **不可执行 + 地址随机化（地基两件套）**：CPU 提供 **NX / XD / XN 位**（页面「不可执行」），OS 据此把数据页标成不可执行，就是 **DEP / W^X**——注入的 shellcode 跑不起来。同时 OS 做 **ASLR**（配合 PIE，随机化栈、堆、库和可执行文件基址）让攻击者猜不到地址，内核那份叫 **KASLR**。这两样是 1990 年代末以来现代系统的默认底座。（ASLR 依赖 PIE，PIE 又牵涉重定位——见[《链接器发展简史》]({% post_url 2026-07-01-linker-evolution-history %}) 里的 RELR 一节。）
 
-> 加固和检测是两码事：**Sanitizer/Valgrind 是「找出 bug」（开发期），加固是「就算有 bug 也别被打穿」（生产期）。** 两者互补，共同兜底那些抽象没防住、测试没覆盖到的漏网之鱼。
+- **守住控制流——前向边与后向边**：溢出最经典的目的是改返回地址或劫持函数指针，于是有一整套护栏：
+  - **后向边（返回地址）**：编译器插**栈金丝雀**（canary，StackGuard，Crispin Cowan 1998 / ProPolice 的思路，随机值由 OS 经 `AT_RANDOM` 提供，`-fstack-protector-strong` 是今天常规）；更硬的是 **Intel CET 影子栈**（CPU 另存一份返回地址副本、返回时比对，Windows 叫「硬件强制堆栈保护」）和 **ARM PAC（指针认证）**（用密钥给指针签名，改一下就失配）。
+  - **前向边（间接调用 / 跳转）**：软件方案是 Clang 的 **`-fsanitize=cfi`**；硬件方案是 **Intel CET 的 IBT（`ENDBRANCH` 落地点）**、**ARM BTI** 和 Windows 的 **CFG / XFG（控制流保护）**——限制间接跳转只能落到合法目标，堵死「跳进 gadget 中段」。这些都要 CPU 出指令、编译器插标记、OS/加载器标页三方配合。
+
+- **内核 / 用户隔离**：**Intel SMEP/SMAP**、**ARM PXN/PAN**——CPU 禁止内核态直接执行或读写用户态内存，OS 打开开关。这堵死了「内核漏洞跳去执行用户态预布好的代码/数据」这一大类提权套路。
+
+- **加载期锁死入口**：链接器 + 加载器合作的 **RELRO（Relocation Read-Only）+ BIND_NOW**，在启动时把 GOT 等元数据解析完就设为只读，堵掉「改 GOT 劫持函数调用」的经典手法。还有**内存保护键（Intel MPK/PKU、ARM POE）**，让同一进程内划出多个保护域，做轻量的**进程内隔离**。
+
+- **内存标签与能力（最接近治本的硬件方向）**：**ARM MTE（内存标签扩展）** 给每 16 字节内存和每个指针打 4 位 tag，访问时硬件比对、不匹配就异常——相当于把 ASan 做进硬件、开销低到能上生产；但它要 **OS 内核处理 tag 异常 + 分配器给内存打 tag** 才跑得起来。**Pixel 8（2023）** 是首款把 MTE 开放给用户的量产机型，不过目前**默认关闭、需在开发者选项里手动打开**（约 5% 开销）。更彻底的 **CHERI**（剑桥大学与 SRI International 提出）用「能力指针」把边界和权限焊进指针本身，从硬件强制空间与时间安全，ARM 据此做出了 **Morello** 原型板（配 CheriBSD）。
+
+> 要分清两件事：**Sanitizer / Fuzzing 是「找出 bug」（开发期），这一层是「就算有 bug 也别被打穿」（生产期）。** 它们不修复漏洞，只层层抬高利用门槛——和真正消除漏洞的抽象、检测互补，共同兜底那些漏网之鱼。
 
 ### 静态分析：不运行也能查
 
@@ -243,6 +260,16 @@ strcpy(buf, src);   // 开 _FORTIFY_SOURCE 后 → __strcpy_chk(buf, src, 10)
 - **商业重器**：**Coverity**、**PVS-Studio**、**Klocwork** 等，分析更深、跨过程跨模块能力更强、误报控制更好，是大型/关键项目常用的选择。
 
 静态分析的共同软肋是**误报（假阳性）**——规则越激进，噪音越大；以及对**复杂跨函数、跨模块**的场景力不从心（指针到底指向谁，静态推断天生有极限）。所以现实里的最佳实践是**分层叠加**：编译器告警打底 → clang-tidy 进 CI → 关键项目再上商业工具，和动态的 Sanitizer 一起，形成「静态 + 动态」的双保险。
+
+### AI 加持：让机器像审查者一样读代码
+
+近两年最新的变量，是 **AI（大语言模型）** 进入了这条链路。它不像传统静态分析那样死磕规则，而是能**像人类审查者一样「读懂」代码的意图**，因此在几个方向上补强了前面的手段：
+
+- **AI 代码审查 / 分析**：GitHub 的 **Copilot 代码审查 / Copilot Autofix**，以及各类接入大模型的安全审查工具，能在 PR 阶段指出可疑的空指针、越界、生命周期问题，甚至直接给出修复补丁。它对「这段代码到底想干嘛」「跨函数的意图」的理解，往往比纯规则的静态分析更接近人的判断，给出的解释也更好懂。
+- **AI 驱动的 Fuzzing**：写 fuzz 目标（harness）一直是苦力活，Google 的 **OSS-Fuzz-Gen** 用大模型**自动生成 fuzz 目标**，大幅降低了给一个新项目接上 fuzzing 的门槛——相当于把上一节的 Fuzzing 也自动化了。
+- **AI 漏洞挖掘 agent**：更前沿的是让大模型像安全研究员一样**自主分析代码找漏洞**。Google 的 **Big Sleep**（前身 Project Naptime）在 2024 年底用这种方式，在 SQLite 里挖出了一个真实、可利用的 0-day，被视为「AI agent 找到真实漏洞」的标志性案例。
+
+但要清醒：**AI 现在是「加速器」，不是「替代品」。** 它会「幻觉」出并不存在的 bug、也会漏掉真的 bug，产出必须经人或其他工具**复核**。把它当成「读得快、覆盖广、会解释的初审」，再压上 Sanitizer、Fuzzing、静态分析和人工把关，才是当下靠谱的用法。
 
 ### 硬化标准库：给容器加「生产级」检查
 
@@ -284,6 +311,26 @@ Stroustrup 和 Herb Sutter 2015 年推出 **C++ Core Guidelines**，配套 **GSL
 
 **两条路线之争，本质是 C++ 的灵魂之问**：是**守住向后兼容、渐进打补丁**（Profiles），还是**壮士断腕、引入借用检查换取真正的安全保证**（Safe C++）？截至目前委员会更倾向前者，但争论远未结束。而背景音里，是 Rust 的持续施压和各国政府的 memory-safety mandate——**这一次，外部压力是真的大。**
 
+## 最新前沿：这两三年正在发生的
+
+前面四条路是主干，最后补一组**这两三年才真正落地或成型**的新东西——它们几乎都在做同一件事：**把过去「可选」的安全，往「默认打开」再推一步。**
+
+- **默认初始化，消灭「未初始化读」**：编译器新增 `-ftrivial-auto-var-init=zero/pattern`，自动把栈变量清零或填入毒值，Linux 内核、Android、Chrome 都已默认开启。C++26 更进一步引入 **「erroneous behavior（错误行为）」**（P2795）：读未初始化变量不再是纯粹的未定义行为，而是「有明确定义的错误行为」，可被工具稳定诊断——从语言层面给这一类 bug 判了刑。
+
+- **生产级、低开销的检测与缓解**：Sanitizer 太重、上不了线上，于是有了 **GWP-ASan**——**采样式**的堆错误检测器，开销低到能挂在真实用户流量上，靠概率长期捞 bug。配套还有强化型分配器 **Scudo**（LLVM，Android 默认）、**hardened_malloc**（GrapheneOS）。Chrome 则用 **MiraclePtr（`raw_ptr<T>` / BackupRefPtr）** 把 use-after-free **变成不可利用的安全崩溃**——不追求消灭 UAF，而是让它「即使发生也打不穿」。
+
+- **给 C/C++ 直接补上边界安全**：Apple 在 Clang 里推 **`-fbounds-safety`** 和 **`__counted_by`** 注解，让 C 的裸指针也带上长度、做边界检查，已用在 XNU 内核等代码上——相当于把「胖指针」的思路低成本塞进现有 C。
+
+- **语言标准自己发力（C++26）**：除了上面的 erroneous behavior，C++26 还带来 **Contracts（契约，P2900）**——把前置/后置条件写进语言，可在运行时检查空指针、越界等；以及**标准库强制硬化**的方向，把 libc++ 那种「发布版也开边界检查」的模式往标准里推。
+
+- **硬件安全真正量产**：ARM **MTE** 不再只是纸面特性——Google **Pixel 8（2023）** 起在消费级设备上提供了内存标签（目前是可选开关、非默认开启）；学术界的 **CHERI**（剑桥大学 + SRI International）也有了 ARM 造的 **Morello** 原型板，把「胖指针即能力」的硬件方案推到了可实测阶段。
+
+- **务实的中间路线：C++/Rust 互操作**：既然全量重写不现实，就让两种语言**共存**——Google 的 **Crubit**、社区的 **cxx**、**autocxx** 做双向绑定，让新模块用 Rust 写、旧 C++ 逐步替换。这也是当前各大厂最现实的迁移姿势。
+
+- **更激进的实验**：也有人干脆造「安全的 C」——比如 **Fil-C**，用垃圾回收 + 能力指针把 C/C++ 变得内存安全的编译器（代价是性能），2024 年起颇受关注。这类项目未必成主流，但代表了「不换语言、直接让 C 安全」的另一种想象。
+
+一句话收口：**这些新潮流方向惊人地一致——要么把安全的「默认值」往上拧，要么在不重写的前提下给存量 C/C++ 加装护栏。** 这恰好是下一节这条主线的注脚。
+
 ## 一条主线：四十年，一直在补，但总差一层
 
 把这四十年摊平了看，主线极其清晰：
@@ -291,8 +338,8 @@ Stroustrup 和 Herb Sutter 2015 年推出 **C++ Core Guidelines**，配套 **GSL
 C++ 的内存安全技术，是**一层一层叠上来的补丁**，每一层都精准地堵一类洞：
 
 - **抽象**（RAII / 容器 / 智能指针 / optional / variant）——从源头上让你少犯错；
-- **动态检测**（Purify / efence / Valgrind / debug 迭代器 / Sanitizer）——把已经犯的错在运行时抓现行；
-- **编译器/库加固**（注解 / 安全函数 / FORTIFY / canary / ASLR / MTE / 硬化 STL）——静态拦一批，运行时兜一批，实在漏了也让它难以被利用；
+- **动态检测**（Purify / efence / Valgrind / debug 迭代器 / Sanitizer / Fuzzing）——把已经犯的错在运行时抓现行；
+- **编译器/库加固**（注解 / 安全函数 / FORTIFY / canary / ASLR / MTE / 静态分析 / AI 审查 / 硬化 STL）——静态拦一批，运行时兜一批，实在漏了也让它难以被利用；
 - **默认安全**（Core Guidelines / Profiles / Safe C++）——正在试图补上那最关键、也最难的一层。
 
 每一层都真实有效，叠起来威力也确实可观——**认真用满这套组合拳的 C++ 项目，内存安全水平其实相当高。** 但它们有一个共同的命门，也正是 NSA 判决书的核心：**这一切都是 opt-in 的，而安全一旦可选，就总有人不选、总有一行代码漏掉。** 四十年的补丁再多，也没能把 C++ 的**默认状态**从「不安全」翻成「安全」。
@@ -310,5 +357,7 @@ C++ 的内存安全技术，是**一层一层叠上来的补丁**，每一层都
 - [AddressSanitizer 论文与文档](https://github.com/google/sanitizers) —— 现代内存排错的基础设施，Serebryany 等人的原始设计。
 - [*Clang Thread Safety Analysis*](https://clang.llvm.org/docs/ThreadSafetyAnalysis.html) —— 编译期查漏加锁的注解系统（`GUARDED_BY` / `REQUIRES`），线程安全「静态防线」的代表。
 - Microsoft, [*Security-enhanced versions of CRT functions*](https://learn.microsoft.com/en-us/cpp/c-runtime-library/security-enhanced-versions-of-crt-functions) —— `_s` 安全函数的官方清单，对照 Annex K 的失败史看更有意思。
+- [OSS-Fuzz](https://github.com/google/oss-fuzz) 与 [AFL++](https://github.com/AFLplusplus/AFLplusplus) / [libFuzzer](https://llvm.org/docs/LibFuzzer.html) —— 覆盖率引导模糊测试的工程化代表，配合 Sanitizer 是挖内存漏洞的主力打法。
+- Google Project Zero, [*From Naptime to Big Sleep*](https://googleprojectzero.blogspot.com/2024/10/from-naptime-to-big-sleep.html) —— AI agent 自主挖出真实 0-day 的标志性案例，看「AI + 漏洞挖掘」到了哪一步。
 - [*Valgrind*](https://valgrind.org/docs/manual/manual.html) 与 [glibc *FORTIFY_SOURCE* 文档](https://www.gnu.org/software/libc/manual/html_node/Source-Fortification.html) —— 两件最该在生产项目里用起来的工具。
 - 本站相关：[《链接器发展简史》]({% post_url 2026-07-01-linker-evolution-history %})（讲到 ASLR/RELR 等加固与链接的关系）、[《C++ 全局优化技术简史》]({% post_url 2026-06-24-cpp-global-optimization-history %})，可对照着看这条工具链上的其他环节。
