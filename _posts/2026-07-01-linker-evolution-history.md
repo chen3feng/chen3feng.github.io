@@ -4,7 +4,7 @@ date: "2026-07-01 09:00:00 +0800"
 categories: [System, Binary]
 tags: [Linker, ld, gold, lld, mold, wild, ld64, BFD, ELF, PE, COFF, Mach-O, COMDAT, LTO, gc-sections, ICF, RELR, CREL, C++]
 layout: post
-published: false
+published: true
 ---
 
 > 你写下 `gcc a.c b.c -lpthread`，回车，几十毫秒后多出一个能跑的可执行文件。这中间发生的事，叫**链接**。七十多年里，链接器要解决的核心问题——「把分散编译的代码片段，解析符号、重定位、拼成一个能跑的整体」——其实一个字都没变，变的只是**规模和约束**。本文按这条主线，从「为什么需要链接器」一路讲到 mold、wild 这些新一代链接器，以及它们身上背的那些优化。
