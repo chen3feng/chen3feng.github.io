@@ -3,7 +3,7 @@ title: "深入二进制系列：线程局部存储演化简史"
 date: "2026-06-10 09:00:00 +0800"
 categories: [System, Binary]
 tags: [TLS, Thread Local, ELF, PE, Mach-O, FS, GS, TPIDR, TLSDESC, thread_local, ThreadLocal, glibc, Java]
-layout: post
+layout: true
 published: false
 ---
 
