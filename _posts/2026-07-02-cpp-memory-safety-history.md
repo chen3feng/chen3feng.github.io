@@ -1,10 +1,10 @@
 ---
-title: "打了四十年补丁：C++ 内存安全技术发展史"
+title: "一个四十年还没解决的问题：C++ 内存安全技术发展史"
 date: "2026-07-02 09:00:00 +0800"
 categories: [C++, Security]
 tags: [C++, Memory Safety, RAII, Smart Pointer, Sanitizer, Valgrind, ASan, TSan, FORTIFY_SOURCE, SAL, Safe C++, Rust, Core Guidelines]
 layout: post
-published: false
+published: true
 ---
 
 > 2022 年，美国国家安全局（NSA）发了一份文件，点名建议「别再用 C/C++ 写新代码」。理由是：微软和谷歌各自统计发现，自家产品里约 **70% 的安全漏洞是内存安全问题**。可 C++ 明明为内存安全折腾了四十年——RAII、智能指针、Valgrind、Sanitizer、FORTIFY、各种注解……为什么还是被点名？这篇文章把这四十年的技术一件件摆出来，你会看到一条清晰的主线：**C++ 的内存安全，是一部「打补丁」史——每一块补丁都堵住了一个洞，但它们有一个共同的命门。**
