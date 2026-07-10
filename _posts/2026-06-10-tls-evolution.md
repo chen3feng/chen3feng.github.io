@@ -3,8 +3,8 @@ title: "深入二进制系列：线程局部存储演化简史"
 date: "2026-06-10 09:00:00 +0800"
 categories: [System, Binary]
 tags: [TLS, Thread Local, ELF, PE, Mach-O, FS, GS, TPIDR, TLSDESC, thread_local, ThreadLocal, glibc, Java]
-layout: true
-published: false
+layout: false
+published: true
 ---
 
 > 多线程程序里，`errno` 凭什么能让每个线程各看各的？一个 `thread_local` 变量，如何让每个线程有自己的副本？这件看似轻而易举的事，背后有四十年的演化：从手动管理的 API，到编译器原生支持的段寄存器寻址，再到 C++、Java 的语言级抽象。本文按时间顺序，把线程局部存储（TLS）从「为什么需要它」一路拆到今天的 `thread_local`、`ThreadLocal` 和 TLSDESC。
