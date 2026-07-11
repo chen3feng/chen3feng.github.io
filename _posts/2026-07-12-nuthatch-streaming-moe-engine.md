@@ -9,7 +9,7 @@ published: true
 
 这次不是读别人的源码，而是**自己从零写了一个**：一个流式 MoE 推理引擎，原生读 GGUF、原生 k-quant、跨平台 C++、用我自己的构建系统 [blade-build](https://github.com/chen3feng/blade-build) 构建。
 
-👉 **[nuthatch](https://github.com/chen3feng/nuthatch)** · 11 章源码分析在 [`docs/analysis/`](https://github.com/chen3feng/nuthatch/tree/main/docs/analysis)
+👉 **[nuthatch](https://github.com/chen3feng/nuthatch)** · 11 章**在线源码分析**：[blog.chen3feng.top/nuthatch/](https://blog.chen3feng.top/nuthatch/)（搜索 + 侧边栏导航）
 
 ## 为什么造，而不是读
 
@@ -61,4 +61,4 @@ published: true
 2. **对拍是最好的调试器**——`norm_topk=false` 这个 bug，靠肉眼读代码很难发现，但逐 token 对拍让它在第一个 token 就暴露。
 3. **数据否掉直觉时，信数据，并如实标注局限**——pin/lru 配比曲线否掉了我"最优在中间"的假设，我也标注了 in-sample 直方图偏乐观这一诚实注脚。
 
-篇幅远非一篇博客能容纳，感兴趣的可以直接翻 [仓库](https://github.com/chen3feng/nuthatch) 和 [源码分析](https://github.com/chen3feng/nuthatch/tree/main/docs/analysis)。欢迎指正和补充。
+篇幅远非一篇博客能容纳，感兴趣的可以直接翻 [仓库](https://github.com/chen3feng/nuthatch) 和在线版 [源码分析](https://blog.chen3feng.top/nuthatch/)（搜索 + 侧边栏导航）。欢迎指正和补充。
